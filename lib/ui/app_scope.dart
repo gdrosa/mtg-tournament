@@ -4,8 +4,8 @@ import '../host/host_controller.dart';
 
 /// Exposes the single app-wide [HostController] to the whole widget tree.
 ///
-/// The controller owns the embedded LAN server, the foreground service, and the
-/// durable store (decks + tournament history). Lifting it above the navigation
+/// The controller owns the selected LAN/online transport, foreground service,
+/// and durable store (decks + tournament history). Lifting it above navigation
 /// shell — rather than creating one per [HostScreen] — lets the Decks / Events /
 /// Profile tabs read real persisted data, and lets the notification "Stop
 /// hosting" button reach a live controller even when no host screen is mounted.

@@ -1,5 +1,5 @@
 name: mtg_tourney
-description: "Offline-first LAN tournament manager for Magic: The Gathering."
+description: "LAN and online tournament manager for Magic: The Gathering."
 publish_to: none
 version: 0.0.1+1
 
@@ -28,6 +28,9 @@ dependencies:
   google_sign_in: ^6.2.1
   googleapis: ^13.0.0
   extension_google_sign_in_as_googleapis_auth: ^2.0.12
+  share_plus: ^13.3.0
+  image_picker: ^1.2.3
+  pasteboard: ^0.5.0
 
 dev_dependencies:
   flutter_test:

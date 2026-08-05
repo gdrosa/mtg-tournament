@@ -1,6 +1,7 @@
 # MTG Tournament Manager — Requirements
 
-> Product requirements for a local-network (LAN) **Magic: The Gathering** tournament manager.
+> Product requirements for a **Magic: The Gathering** tournament manager with
+> selectable local-network (LAN) and online hosting.
 > Derived from owner interviews and written architecture decisions.
 > See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the current implementation and
 > [`../README.md`](../README.md) for setup and development commands.
@@ -11,7 +12,20 @@ describes what the repository implements today.
 
 ## 1. Product summary
 
-One person — the **organizer / host** — runs an Android app on their phone. That app hosts the entire tournament and serves a web interface over the local Wi-Fi/LAN. Other players join from their own phones' **browsers** by scanning a QR code or typing a short URL — **no app to install**. The host is simultaneously a **player and the admin** (full organizer controls). Everything works **offline**, on local Wi-Fi only, with no internet connection.
+One person — the **organizer / host** — runs an Android app on their phone. That app hosts the entire tournament. Other players join from their own phones' **browsers** by scanning a QR code or typing a short URL — **no app to install**. The host is simultaneously a **player and the admin** (full organizer controls). During creation, the host chooses either LAN (same Wi-Fi, offline-capable) or Online (internet access through the project relay).
+
+### Online-hosting extension (2026-08-05)
+
+- The creation flow must require an explicit **Online** or **LAN** choice.
+- LAN retains the embedded phone server and offline behavior specified below.
+- Online uses an outbound phone connection to a free relay; the phone remains
+  authoritative and must stay connected.
+- The relay must not persist tournament payloads or expose organizer commands.
+- A temporary online outage must reconnect without becoming a manual pause or
+  discarding tournament state.
+- Online browser sessions must be scoped by a high-entropy room ID. The existing
+  event code remains a human confirmation that the player opened the intended
+  tournament; it is not an authentication secret.
 
 The tournament runs **Swiss rounds** of **best-of-three** matches. Both players in a match enter the result independently; the app accepts it only when the two submissions agree. After a match each player sees the opponent's decklist and confirms "no infractions" (thumbs up / thumbs down). A round advances only when every match is confirmed; any disagreement or reported infraction is escalated to the host for review instead of auto-advancing. Results are stored per **named deck** (e.g. *"Domain Zoo"*) so the app can report how each deck performs across tournaments and against specific opponents.
 
@@ -125,7 +139,7 @@ Totals: **52 functional** + **40 non-functional** = 92 requirements (58 Must · 
 
 | ID | Pri | Requirement | Target / metric |
 |---|---|---|---|
-| NFR-13 | Must | The entire application (host + client interface) must operate with zero internet connectivity, on local Wi-Fi only. | 100% of core flows (register, deck entry, host event, join by ID, pairings, result entry/confirmation, opponent decklist view, advance round, standings) function with the phone in airplane mode + Wi-Fi/hotspot only; no outbound internet call on any core path. |
+| NFR-13 | Must | LAN mode (host + client interface) must operate with zero internet connectivity on local Wi-Fi only. | 100% of core flows (register, deck entry, host event, join by ID, pairings, result entry/confirmation, opponent decklist view, advance round, standings) function in LAN mode with the phone in airplane mode + Wi-Fi/hotspot only; no outbound internet call is required on a LAN match path. |
 | NFR-14 | Must | All client assets must be self-served by the host; no CDN, web font, analytics, or external dependency at runtime. | 0 external network requests observed in browser dev-tools network trace during a full tournament; all JS/CSS/fonts/icons bundled and served from the host phone. |
 | NFR-15 | Should | Players must be able to discover and join the tournament on the LAN without typing complex configuration. | Join via single LAN URL (host IP:port) plus unique event ID, reachable by QR code and/or manual entry; join success <= 30 s from scan/entry; works when host runs a Wi-Fi hotspot as well as on shared Wi-Fi. |
 | NFR-16 | Could | The host must tolerate LAN address changes (DHCP lease change / hotspot toggle) without invalidating an active tournament. | On host IP change, organizer can re-publish a new join URL/QR and all existing players' sessions remain valid and resumable; tournament state unaffected. |
@@ -136,7 +150,7 @@ Totals: **52 functional** + **40 non-functional** = 92 requirements (58 Must · 
 |---|---|---|---|
 | NFR-17 | Must | Define and enforce a LAN trust model: organizer holds full admin authority; players hold only player authority over their own data and matches. | Admin-only actions (create/cancel event, override result, advance/suspend round, drop player) require organizer authentication; 0 admin actions executable from a player session in penetration test. |
 | NFR-18 | Must | A player must not be able to forge or submit their opponent's result confirmation; both-sides agreement is cryptographically/sessionally bound to distinct player identities. | Result is accepted only when two distinct authenticated player sessions independently submit matching results; a single session cannot satisfy both sides; forging another player's confirmation fails in 100% of attempts in adversarial test (no shared/guessable token). |
-| NFR-19 | Must | Each player session must be authenticated with an unguessable, per-player credential bound to that session/device for the tournament duration. | Session tokens >= 128 bits entropy, unique per player, not enumerable from event ID; token theft requires same-LAN active MITM, not URL guessing. |
+| NFR-19 | Must | Each player session must be authenticated with an unguessable, per-player credential bound to that session/device for the tournament duration. | Session tokens >= 128 bits entropy, unique per player, and not enumerable from event ID; Online transport protects them with WSS, while LAN mode retains the documented same-network interception risk. |
 | NFR-20 | Must | On result mismatch or a reported infraction (thumbs-down), the system must auto-suspend the affected match/round and require organizer adjudication before advancing. | 100% of mismatched-result or flagged-infraction matches block automatic round generation and raise an organizer alert; round advances only after organizer resolution or all matches confirmed clean. |
 | NFR-21 | Must | Organizer override of a result (the host is also a player) must require explicit admin authentication and be fully attributed, preventing self-favorable silent edits. | Every override records actor=organizer, before/after value, timestamp, reason; overrides are immutable in the audit log and visible in NFR-31 trail; 0 silent (unlogged) overrides possible. |
 | NFR-22 | Must | Minimize personal data: store no PII beyond a self-chosen nickname and tournament/deck data; no email, real name, phone, or location required for players. | Player record contains only {nickname, deck name, decklist, results}; 0 mandatory PII fields beyond nickname; no device fingerprint persisted beyond the event. |
@@ -274,7 +288,7 @@ Built and verified on the emulator (debug build, all 31 Dart tests green, `flutt
 - **FR-52 Tournament history** — finished events are archived to durable storage; the **Events** tab lists them (date · size · 🏆 champion) and opens a detail screen (final standings, roster + decklists, per-round results); **delete** removes one and recomputes stats. **Decks** and **Profile** show real per-deck records and lifetime stats from the same `StatsEngine` read model. All four tabs show honest empty states with **no mock/sample data** (the previous placeholders were removed).
 - **Durable owner identity** — the device has a persistent `ownerPlayerId` (the host's durable player) that survives event end and backs the Decks/Profile/history aggregation (resolves §8 Q1).
 
-Not yet built / out of v1: card images (FR-50), top-cut bracket (Q2), explicit late-join/manual-pairing UIs (FR-25/late-add), localisation (NFR-28), Drift/SQLite migration (currently a single JSON blob via `FilePersistence` — schema/ACID NFR-33/35 still to migrate), and the open-LAN anti-impersonation hardening (Q9).
+Not yet built / out of v1: top-cut bracket (Q2), explicit late-join/manual-pairing UIs (FR-25/late-add), localisation (NFR-28), Drift/SQLite migration (currently a single JSON blob via `FilePersistence` — schema/ACID NFR-33/35 still to migrate), and the open-LAN anti-impersonation hardening (Q9).
 
 ---
 

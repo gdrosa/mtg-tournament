@@ -51,6 +51,9 @@ CLAUDE.md
 /build/
 /coverage/
 /android/.kotlin/
+/cloudflare/node_modules/
+/cloudflare/.wrangler/
+/cloudflare/.dev.vars
 
 # Symbolication related
 app.*.symbols
@@ -62,3 +65,5 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+notes

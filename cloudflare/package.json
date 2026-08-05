@@ -1,0 +1,27 @@
+{
+  "name": "mtg-tournament-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "overrides": {
+    "undici": "7.29.0"
+  },
+  "scripts": {
+    "check": "node --check ../assets/web/app.js && npm run typecheck && npm test",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "test": "vitest run --max-workers=1 --no-isolate",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.20.2",
+    "@cloudflare/workers-types": "5.20260804.1",
+    "typescript": "5.9.2",
+    "vitest": "4.1.10",
+    "wrangler": "4.119.0"
+  }
+}

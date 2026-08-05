@@ -31,10 +31,38 @@ jobs:
         run: flutter pub get
 
       - name: Check formatting
-        run: dart format --output=none --set-exit-if-changed lib test bin
+        run: dart format --output=none --set-exit-if-changed lib test bin tool
 
       - name: Analyze
         run: flutter analyze
 
       - name: Test
         run: flutter test --reporter expanded
+
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: cloudflare
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+
+      - name: Install relay dependencies
+        run: npm ci
+
+      - name: Type-check and test relay
+        run: npm run check
+
+      - name: Validate deploy bundle
+        run: npx wrangler deploy --dry-run --outdir .wrangler-dry-run

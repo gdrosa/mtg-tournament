@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mtg_tourney/server/controller.dart';
 import 'package:mtg_tourney/shared/models.dart';
+import 'package:mtg_tourney/shared/tournament_engine.dart';
 
 /// Integration tests for the server-side controller (the same code the embedded
 /// LAN server drives). Pure Dart, runs headless on Windows.
@@ -102,5 +103,66 @@ void main() {
     // hostPlayerId; assert the identities differ so that gate is meaningful.
     expect(intruder.playerId, isNot(host.playerId));
     expect(c.hostPlayerId, host.playerId);
+  });
+
+  test('tournament and per-player deck resource caps are enforced', () {
+    final c = ServerController(rng: Random(17));
+    final host = c.resolveSession('Host', null);
+    c.createTournament(name: 'Capacity Cup', hostPlayerId: host.playerId);
+
+    for (var i = 0; i < maxTournamentPlayers; i++) {
+      final player = c.resolveSession('Player $i', null);
+      final deck = c.saveDeck(
+        ownerId: player.playerId,
+        name: 'Deck $i',
+        mainboard: '',
+        sideboard: '',
+      );
+      c.joinTournament(playerId: player.playerId, deckId: deck.id);
+    }
+    final extra = c.resolveSession('Extra player', null);
+    final extraDeck = c.saveDeck(
+      ownerId: extra.playerId,
+      name: 'Extra deck',
+      mainboard: '',
+      sideboard: '',
+    );
+    expect(
+      () => c.joinTournament(playerId: extra.playerId, deckId: extraDeck.id),
+      throwsA(isA<EngineError>()),
+    );
+
+    final collector = c.resolveSession('Collector', null);
+    Deck? firstDeck;
+    for (var i = 0; i < maxDecksPerPlayer; i++) {
+      final deck = c.saveDeck(
+        ownerId: collector.playerId,
+        name: 'Saved deck $i',
+        mainboard: '',
+        sideboard: '',
+      );
+      firstDeck ??= deck;
+    }
+    expect(
+      () => c.saveDeck(
+        ownerId: collector.playerId,
+        name: 'One too many',
+        mainboard: '',
+        sideboard: '',
+      ),
+      throwsA(isA<EngineError>()),
+    );
+    expect(
+      c
+          .saveDeck(
+            ownerId: collector.playerId,
+            deckId: firstDeck!.id,
+            name: 'Edited existing deck',
+            mainboard: '',
+            sideboard: '',
+          )
+          .id,
+      firstDeck.id,
+    );
   });
 }

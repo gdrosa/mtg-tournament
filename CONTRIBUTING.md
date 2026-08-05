@@ -1,8 +1,8 @@
 # Contributing
 
 Thanks for improving MTG Tournament. Keep changes focused on reliable,
-offline-first local events and preserve the trust boundaries described in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+organizer-hosted events, preserve LAN mode's offline guarantees, and respect the
+trust boundaries described in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Setup
 
@@ -19,12 +19,27 @@ The pure Dart server can be developed without an Android device:
 dart run bin/dev_server.dart 8091
 ```
 
+Online-relay development additionally requires Node.js 22+:
+
+```shell
+cd cloudflare
+npm ci
+```
+
 ## Before submitting a change
 
 ```shell
-dart format lib test bin
+dart format --output=none --set-exit-if-changed lib test bin tool
 flutter analyze
 flutter test
+```
+
+When changing the online relay or shared browser client, also run:
+
+```shell
+cd cloudflare
+npm run check
+npx wrangler deploy --dry-run --outdir .wrangler-dry-run
 ```
 
 Add regression coverage when changing:
@@ -32,6 +47,7 @@ Add regression coverage when changing:
 - Swiss pairing or tiebreak calculations
 - match state transitions and round gating
 - authorization, snapshots, or HTTP routes
+- relay authentication, reconnection, limits, or browser protocol handling
 - persistence and backup import/export
 - deck ownership or tournament-lock behavior
 
@@ -43,7 +59,8 @@ Add regression coverage when changing:
 - Make durable mutations persist before relying on a UI notification.
 - Keep the browser client build-free unless there is a compelling product reason to change it.
 - Preserve typed deck text when an online card lookup fails.
-- Do not add a runtime internet dependency to tournament play.
+- Do not add a runtime internet dependency to LAN tournament play. Online-mode
+  dependencies must remain explicit and preserve the phone as the authority.
 
 ## Repository hygiene
 

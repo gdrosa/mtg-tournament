@@ -106,4 +106,52 @@ void main() {
       expect(c.decks[aliceDeck.id]!.name, 'Burn');
     },
   );
+
+  test('an unknown client token is replaced with a server-generated token', () {
+    final c = ServerController(rng: Random(13));
+
+    final session = c.resolveSession('Mallory', 'attacker-chosen-token');
+
+    expect(session.token, isNot('attacker-chosen-token'));
+    expect(c.playerIdForToken('attacker-chosen-token'), isNull);
+    expect(c.playerIdForToken(session.token), session.playerId);
+  });
+
+  test(
+    'player-facing APIs reject fields that could inflate snapshots',
+    () async {
+      final c = ServerController(rng: Random(14));
+      final host = c.resolveSession('Host', null);
+      c.createTournament(name: 'Cup', hostPlayerId: host.playerId);
+      final h = buildHandler(c);
+
+      final oversizedNickname = await post(h, '/api/join', {
+        'nickname': List.filled(maxNicknameLength + 1, 'N').join(),
+        'code': c.joinCode,
+      });
+      expect(oversizedNickname['status'], 400);
+      expect(c.players, hasLength(1));
+
+      final joined = await post(h, '/api/join', {
+        'nickname': 'Alice',
+        'code': c.joinCode,
+      });
+      expect(joined['status'], 200);
+      final token = joined['token'] as String;
+
+      final oversizedName = await post(h, '/api/deck', {
+        'token': token,
+        'name': List.filled(maxDeckNameLength + 1, 'D').join(),
+      });
+      expect(oversizedName['status'], 400);
+
+      final oversizedList = await post(h, '/api/deck', {
+        'token': token,
+        'name': 'Deck',
+        'mainboard': List.filled(maxMainboardLength + 1, 'x').join(),
+      });
+      expect(oversizedList['status'], 400);
+      expect(c.decks, isEmpty);
+    },
+  );
 }

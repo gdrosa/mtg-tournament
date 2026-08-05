@@ -1,5 +1,5 @@
-/// Flutter-side glue: owns the embedded server + controller, starts/stops the
-/// LAN listener and the keep-alive foreground service, persists state for
+/// Flutter-side glue: owns the authoritative controller, starts/stops the
+/// selected LAN or online transport and foreground service, persists state for
 /// crash-resume, and exposes the host's own per-player snapshot to the UI.
 ///
 /// The host is "just another client": its own player view goes through the
@@ -21,8 +21,12 @@ import '../services/card_cache.dart';
 import '../services/cloud_sync.dart';
 import '../services/scryfall.dart';
 import '../shared/cards.dart';
+import '../shared/hosting.dart';
 import 'foreground_task.dart';
+import 'online_relay.dart';
 import 'static_assets.dart';
+
+const _configuredRelayUrl = String.fromEnvironment('MTG_RELAY_URL');
 
 /// The Stop button shown in the foreground-service notification (FR: organizer
 /// can stop hosting from the notification shade without opening the app).
@@ -32,7 +36,15 @@ const List<NotificationButton> _notificationButtons = [
 
 class HostController extends ChangeNotifier {
   final ServerController server = ServerController();
+  final String relayBaseUrl;
   HttpServer? _http;
+  OnlineRelayClient? _relay;
+  OnlineRelaySessionStore? _relayStore;
+  StreamSubscription<RelayConnectionState>? _relayStateSubscription;
+  bool _hostingEnabled = false;
+  int _transportGeneration = 0;
+  bool _replacingExpiredRoom = false;
+  String? _transportError;
   String? hostToken;
   String? hostPlayerId;
   String? lanIp;
@@ -48,6 +60,32 @@ class HostController extends ChangeNotifier {
 
   bool get canEditCards => imageCache != null;
 
+  // ---- Deck profile pictures --------------------------------------------
+  // Plain files next to the card cache, keyed by deck id: a picture is a local
+  // decoration, so it stays out of the persisted JSON (and the Drive backup).
+  String? _avatarDirPath;
+
+  /// The deck's profile picture, or null if it has none.
+  File? deckAvatar(String deckId) {
+    final dir = _avatarDirPath;
+    if (dir == null) return null;
+    final file = File('$dir/$deckId.img');
+    return file.existsSync() ? file : null;
+  }
+
+  /// Replace (or, with a null [bytes], remove) a deck's profile picture.
+  Future<void> setDeckAvatar(String deckId, List<int>? bytes) async {
+    final dir = _avatarDirPath;
+    if (dir == null) return;
+    final file = File('$dir/$deckId.img');
+    if (bytes == null) {
+      if (file.existsSync()) await file.delete();
+    } else {
+      await file.writeAsBytes(bytes, flush: true);
+    }
+    notifyListeners();
+  }
+
   // ---- Google account cloud backup (optional) ----
   final CloudSync cloud;
   // True once the user has picked "sign in" or "continue as guest" this launch —
@@ -60,7 +98,8 @@ class HostController extends ChangeNotifier {
   /// A silent Google session alone must not bypass restore after a reinstall.
   bool get needsAccountGate => ready && server.owner == null && !_accountChosen;
 
-  HostController({CloudSync? cloud}) : cloud = cloud ?? DriveCloudSync() {
+  HostController({CloudSync? cloud, this.relayBaseUrl = _configuredRelayUrl})
+    : cloud = cloud ?? DriveCloudSync() {
     server.onChange = _onServerChanged;
     server.onDeckSaved = _onDeckSaved;
   }
@@ -89,17 +128,63 @@ class HostController extends ChangeNotifier {
     );
   }
 
-  bool get isServing => _http != null;
+  HostingMode get hostingMode => server.hostingMode ?? HostingMode.lan;
+  bool get onlineHostingConfigured {
+    final uri = Uri.tryParse(relayBaseUrl.trim());
+    return uri != null &&
+        uri.host.isNotEmpty &&
+        (uri.scheme == 'https' || (kDebugMode && uri.scheme == 'http'));
+  }
+
+  RelayConnectionState get relayState =>
+      _relay?.state ?? RelayConnectionState.stopped;
+  String? get transportError {
+    final error = _transportError ?? _relay?.lastError;
+    return error == null ? null : _friendlyTransportError(error);
+  }
+
+  bool get isServing => switch (hostingMode) {
+    HostingMode.lan => _http != null && lanIp != null,
+    HostingMode.online => relayState == RelayConnectionState.connected,
+  };
   bool get hasActiveEvent => server.joinCode != null;
 
   /// True when an event is live but we are not currently serving it (the
   /// organizer pressed "Stop hosting" in the notification). The state is kept;
   /// hosting can be resumed.
-  bool get hostingPaused => hasActiveEvent && !isServing;
+  bool get hostingPaused => hasActiveEvent && !_hostingEnabled;
+
+  String get hostingStatusLabel {
+    if (hostingPaused) return 'Paused';
+    if (hostingMode == HostingMode.lan) {
+      if (_http == null) return 'Starting';
+      return lanIp == null ? 'Needs network' : 'Live';
+    }
+    return switch (relayState) {
+      RelayConnectionState.connected => 'Connected',
+      RelayConnectionState.connecting => 'Connecting',
+      RelayConnectionState.reconnecting => 'Reconnecting',
+      RelayConnectionState.stopped =>
+        transportError == null ? 'Starting' : 'Needs attention',
+    };
+  }
 
   Map<String, dynamic> get snapshot => server.snapshotFor(hostPlayerId);
-  String get joinUrl =>
-      'http://${lanIp ?? 'localhost'}:$port/?t=${server.joinCode}';
+  String? get joinUrl {
+    final code = server.joinCode;
+    if (code == null) return null;
+    if (hostingMode == HostingMode.lan) {
+      final ip = lanIp;
+      return ip == null ? null : 'http://$ip:$port/?t=$code';
+    }
+    final raw = _relay?.joinUrl;
+    if (raw == null || raw.isEmpty) return null;
+    final uri = Uri.tryParse(raw);
+    if (uri == null) return null;
+    return uri
+        .replace(queryParameters: {...uri.queryParameters, 't': code})
+        .toString();
+  }
 
   /// Attach durable storage and resume an in-progress tournament if one was
   /// persisted (crash-recovery). Idempotent: safe to call from every screen
@@ -112,16 +197,16 @@ class HostController extends ChangeNotifier {
     try {
       final dir = await getApplicationDocumentsDirectory();
       server.store = FilePersistence('${dir.path}/tournament.json');
+      _relayStore = FileOnlineRelaySessionStore(
+        '${dir.path}/online_relay_session.json',
+      );
       final imgDir = Directory('${dir.path}/card_images');
       _imageDirPath = imgDir.path;
       imageCache = CardImageCache(imgDir);
+      _avatarDirPath = (Directory(
+        '${dir.path}/deck_avatars',
+      )..createSync(recursive: true)).path;
       server.loadFromStore();
-      if (server.joinCode != null) {
-        hostPlayerId = server.hostPlayerId;
-        hostToken = server.ownerToken;
-        await _ensureServer();
-        await _startForegroundService();
-      }
     } catch (_) {
       // storage unavailable (e.g. tests / desktop) — run without persistence,
       // but still give the editor a usable image cache (a temp dir) so card
@@ -130,10 +215,20 @@ class HostController extends ChangeNotifier {
         final tmp = Directory.systemTemp.createTempSync('mtg_card_images');
         _imageDirPath = tmp.path;
         imageCache = CardImageCache(tmp);
+        _avatarDirPath = Directory.systemTemp
+            .createTempSync('mtg_deck_avatars')
+            .path;
       }
+    }
+    _relayStore ??= MemoryOnlineRelaySessionStore();
+    if (server.joinCode != null) {
+      hostPlayerId = server.hostPlayerId;
+      hostToken = server.ownerToken;
+      _hostingEnabled = true;
     }
     ready = true;
     notifyListeners();
+    if (hasActiveEvent) unawaited(_resumeActiveHosting());
     // Resume a prior Google session in the BACKGROUND — never block app startup
     // on a network call (offline-first). When local durable state is empty (for
     // example after a reinstall), restore before dismissing the account gate.
@@ -196,11 +291,27 @@ class HostController extends ChangeNotifier {
     final remote = await cloud.download();
     final hadRemote = remote != null && remote.trim().isNotEmpty;
     if (hadRemote) {
+      final previousEventId = server.engine?.id;
+      final previousMode = server.hostingMode;
       if (!server.importJson(remote)) {
         throw const FormatException('Invalid Google Drive backup.');
       }
       hostPlayerId = server.hostPlayerId;
       hostToken = server.ownerToken;
+      final transportChanged =
+          previousEventId != server.engine?.id ||
+          previousMode != server.hostingMode;
+      if (transportChanged) {
+        _transportGeneration++;
+        await _relay?.stop();
+        _relayStore?.clear();
+        await _http?.close(force: true);
+        _http = null;
+        lanIp = null;
+        await _stopForegroundService();
+        _hostingEnabled = hasActiveEvent;
+        if (hasActiveEvent) unawaited(_resumeActiveHosting());
+      }
     }
 
     var createdGoogleOwner = false;
@@ -255,6 +366,162 @@ class HostController extends ChangeNotifier {
     if (data == 'stopHosting') pauseHosting();
   }
 
+  OnlineRelayClient _onlineRelay() {
+    final existing = _relay;
+    if (existing != null) return existing;
+    if (!onlineHostingConfigured) {
+      throw StateError(
+        'Online hosting is not configured in this build. Set MTG_RELAY_URL '
+        'to the deployed Cloudflare Worker URL.',
+      );
+    }
+    final relay = OnlineRelayClient(
+      controller: server,
+      baseUrl: Uri.parse(relayBaseUrl.trim()),
+      store: _relayStore ??= MemoryOnlineRelaySessionStore(),
+    );
+    _relayStateSubscription = relay.stateChanges.listen((state) {
+      final error = relay.lastError;
+      _transportError = error == null ? null : _friendlyTransportError(error);
+      notifyListeners();
+      unawaited(_updateServiceNotification());
+      if (state == RelayConnectionState.reconnecting &&
+          _hostingEnabled &&
+          hasActiveEvent &&
+          hostingMode == HostingMode.online &&
+          _relayNeedsReplacement(error)) {
+        unawaited(_replaceExpiredOnlineRoom());
+      }
+    });
+    return _relay = relay;
+  }
+
+  Future<void> _resumeActiveHosting() async {
+    if (!hasActiveEvent || !_hostingEnabled) return;
+    final generation = ++_transportGeneration;
+    final eventId = server.engine!.id;
+    final mode = hostingMode;
+    _transportError = null;
+    notifyListeners();
+    try {
+      if (mode == HostingMode.online) {
+        final relay = _onlineRelay();
+        var session = _relayStore?.load();
+        final relayUri = Uri.parse(relayBaseUrl.trim());
+        if (session?.eventId != server.engine?.id ||
+            (session != null &&
+                (session.isExpired() || !session.belongsTo(relayUri)))) {
+          _relayStore?.clear();
+          session = null;
+        }
+        session ??= await relay.provision();
+        if (!_transportIsCurrent(generation, eventId, mode)) {
+          await _cleanupCancelledTransport(mode);
+          return;
+        }
+        session = session.copyWith(eventId: eventId);
+        await relay.start(session);
+      } else {
+        await _ensureServer();
+      }
+    } catch (error) {
+      if (!_transportIsCurrent(generation, eventId, mode)) {
+        await _cleanupCancelledTransport(mode);
+        return;
+      }
+      _transportError = _friendlyTransportError(error);
+      notifyListeners();
+    }
+    if (!_transportIsCurrent(generation, eventId, mode)) {
+      await _cleanupCancelledTransport(mode);
+      return;
+    }
+    try {
+      await _startForegroundService();
+    } catch (error) {
+      if (!_transportIsCurrent(generation, eventId, mode)) {
+        await _cleanupCancelledTransport(mode);
+        return;
+      }
+      _transportError ??= _friendlyTransportError(error);
+      notifyListeners();
+    }
+    if (!_transportIsCurrent(generation, eventId, mode)) {
+      await _cleanupCancelledTransport(mode);
+    }
+  }
+
+  bool _transportIsCurrent(int generation, String eventId, HostingMode mode) =>
+      generation == _transportGeneration &&
+      _hostingEnabled &&
+      server.engine?.id == eventId &&
+      hostingMode == mode;
+
+  Future<void> _cleanupCancelledTransport(HostingMode attemptedMode) async {
+    // A newer generation may intentionally own the same transport. Only tear
+    // it down when hosting was cancelled or the event/mode actually changed.
+    if (_hostingEnabled && hasActiveEvent && hostingMode == attemptedMode) {
+      return;
+    }
+    if (attemptedMode == HostingMode.online) {
+      await _relay?.stop();
+    } else {
+      await _http?.close(force: true);
+      _http = null;
+      lanIp = null;
+    }
+    if (!_hostingEnabled || !hasActiveEvent) {
+      await _stopForegroundService();
+    }
+  }
+
+  bool _relayNeedsReplacement(Object? error) {
+    final session = _relayStore?.load();
+    if (session?.isExpired() ?? false) return true;
+    final text = error?.toString().toLowerCase() ?? '';
+    return text.contains('room expired') || text.contains('room_expired');
+  }
+
+  Future<void> _replaceExpiredOnlineRoom() async {
+    if (_replacingExpiredRoom) return;
+    _replacingExpiredRoom = true;
+    try {
+      await retryHosting(replaceOnlineRoom: true);
+    } finally {
+      _replacingExpiredRoom = false;
+    }
+  }
+
+  String _friendlyTransportError(Object error) {
+    final text = error.toString();
+    return text.replaceFirst('Bad state: ', '').replaceFirst('Exception: ', '');
+  }
+
+  /// Retry a transport without turning a temporary online outage into a manual
+  /// pause. The relay itself also reconnects automatically with backoff.
+  Future<void> retryHosting({bool replaceOnlineRoom = false}) async {
+    if (!hasActiveEvent) return;
+    if (!_hostingEnabled) return resumeHosting();
+    _transportGeneration++;
+    if (hostingMode == HostingMode.online) {
+      final saved = _relayStore?.load();
+      final relayUri = Uri.parse(relayBaseUrl.trim());
+      final needsReplacement =
+          replaceOnlineRoom ||
+          saved == null ||
+          saved.isExpired() ||
+          !saved.belongsTo(relayUri) ||
+          _relayNeedsReplacement(_relay?.lastError);
+      await _relay?.stop();
+      if (needsReplacement) _relayStore?.clear();
+    } else {
+      await _http?.close(force: true);
+      _http = null;
+      lanIp = null;
+    }
+    await _resumeActiveHosting();
+  }
+
   // Serialises startup: concurrent callers (e.g. a rapid double-tap on "Resume
   // hosting") share one in-flight future instead of both racing to bind :8080
   // and the loser throwing "address already in use".
@@ -278,6 +545,10 @@ class HostController extends ChangeNotifier {
         imageDirPath: _imageDirPath,
       );
       lanIp = await lanIpv4();
+      if (lanIp == null) {
+        _transportError =
+            'No LAN address is available. Connect to Wi-Fi and retry.';
+      }
     } finally {
       _starting = null;
     }
@@ -289,7 +560,8 @@ class HostController extends ChangeNotifier {
       androidNotificationOptions: AndroidNotificationOptions(
         channelId: 'mtg_hosting',
         channelName: 'Tournament hosting',
-        channelDescription: 'Keeps the LAN server reachable during an event.',
+        channelDescription:
+            'Keeps LAN and online tournaments reachable during an event.',
         channelImportance: NotificationChannelImportance.LOW,
         priority: NotificationPriority.LOW,
       ),
@@ -301,7 +573,7 @@ class HostController extends ChangeNotifier {
         eventAction: ForegroundTaskEventAction.nothing(),
         autoRunOnBoot: false,
         allowWakeLock: false,
-        allowWifiLock: true,
+        allowWifiLock: hostingMode == HostingMode.lan,
       ),
     );
     await FlutterForegroundTask.requestNotificationPermission();
@@ -310,11 +582,23 @@ class HostController extends ChangeNotifier {
     await FlutterForegroundTask.startService(
       serviceId: 4242,
       notificationTitle: 'Hosting "${server.engine?.name ?? 'tournament'}"',
-      notificationText: 'Players join with code ${server.joinCode}',
+      notificationText:
+          '${hostingMode.label} · players join with code ${server.joinCode}',
       notificationButtons: _notificationButtons,
       callback: hostingTaskCallback,
     );
     await _ensureBatteryExemption();
+  }
+
+  Future<void> _stopForegroundService() async {
+    try {
+      if (await FlutterForegroundTask.isRunningService) {
+        await FlutterForegroundTask.stopService();
+      }
+    } catch (_) {
+      // The service may already have stopped from its notification action or
+      // because the platform reclaimed the process.
+    }
   }
 
   /// Ask the OS to exempt the app from battery optimization / Doze so the LAN
@@ -340,7 +624,7 @@ class HostController extends ChangeNotifier {
           ? '$reviews match${reviews == 1 ? '' : 'es'} to resolve — result or infraction'
           : server.engine == null
           ? 'Lobby open · code ${server.joinCode}'
-          : 'Round ${server.engine!.rounds.length} · ${server.engine!.entries.length} players',
+          : '${hostingMode.label} · Round ${server.engine!.rounds.length} · ${server.engine!.entries.length} players',
       // Re-pass the buttons so the Stop action survives notification rebuilds.
       notificationButtons: _notificationButtons,
     );
@@ -350,38 +634,82 @@ class HostController extends ChangeNotifier {
   /// event — invoked by the notification "Stop hosting" button. The tournament
   /// stays persisted and can be resumed with [resumeHosting].
   Future<void> pauseHosting() async {
-    await _http?.close(force: true);
-    _http = null;
-    lanIp = null;
-    try {
-      if (await FlutterForegroundTask.isRunningService) {
-        await FlutterForegroundTask.stopService();
-      }
-    } catch (_) {
-      // service already stopped (e.g. the button handler stopped it first)
+    _hostingEnabled = false;
+    _transportGeneration++;
+    if (hostingMode == HostingMode.online) {
+      await _relay?.stop();
+    } else {
+      await _http?.close(force: true);
+      _http = null;
+      lanIp = null;
     }
+    await _stopForegroundService();
     notifyListeners();
   }
 
-  /// Bring a paused event back online: restart the LAN server + service.
+  /// Bring a paused event back online using its original LAN/online mode.
   Future<void> resumeHosting() async {
     if (!hasActiveEvent) return;
-    await _ensureServer();
-    await _startForegroundService();
-    notifyListeners();
+    _hostingEnabled = true;
+    await _resumeActiveHosting();
   }
 
   Future<String> createEvent({
     required String name,
     required String nickname,
+    required HostingMode mode,
   }) async {
-    await _ensureServer();
+    if (hasActiveEvent) throw StateError('A tournament is already active.');
+    final generation = ++_transportGeneration;
+    OnlineRelaySession? onlineSession;
+    if (mode == HostingMode.online) {
+      final relay = _onlineRelay();
+      // Never reuse credentials left by an event that was already ended.
+      _relayStore?.clear();
+      onlineSession = await relay.provision();
+    } else {
+      await _ensureServer();
+    }
+    if (generation != _transportGeneration || hasActiveEvent) {
+      if (onlineSession != null) await _relay?.stop(closeRoom: true);
+      throw StateError('Tournament creation was cancelled.');
+    }
     // The host plays as this device's durable owner identity.
     final s = server.ensureOwner(nickname);
     hostToken = s.token;
     hostPlayerId = s.playerId;
-    final code = server.createTournament(name: name, hostPlayerId: s.playerId);
-    await _startForegroundService();
+    final code = server.createTournament(
+      name: name,
+      hostPlayerId: s.playerId,
+      mode: mode,
+    );
+    final eventId = server.engine!.id;
+    _hostingEnabled = true;
+    _transportError = null;
+    if (onlineSession != null) {
+      try {
+        await _relay!.start(onlineSession.copyWith(eventId: eventId));
+      } catch (error) {
+        // The room is provisioned and reconnect remains enabled; keep the
+        // tournament so the organizer can see its status and retry.
+        _transportError = _friendlyTransportError(error);
+      }
+    }
+    if (!_transportIsCurrent(generation, eventId, mode)) {
+      await _cleanupCancelledTransport(mode);
+      throw StateError('Tournament creation was cancelled.');
+    }
+    try {
+      await _startForegroundService();
+    } catch (error) {
+      // Hosting is already live (and the event is durably created). A service
+      // notification failure must not prevent the host deck from being seated.
+      _transportError ??= _friendlyTransportError(error);
+    }
+    if (!_transportIsCurrent(generation, eventId, mode)) {
+      await _cleanupCancelledTransport(mode);
+      throw StateError('Tournament creation was cancelled.');
+    }
     notifyListeners();
     return code;
   }
@@ -707,13 +1035,25 @@ class HostController extends ChangeNotifier {
   /// End the event, stop the service, and clear the durable tournament (keeps
   /// players/decks for the next event).
   Future<void> endEvent() async {
+    _hostingEnabled = false;
+    _transportGeneration++;
+    if (hostingMode == HostingMode.online) {
+      try {
+        await _relay?.stop(closeRoom: true);
+      } catch (_) {
+        // The relay also expires abandoned rooms server-side.
+      }
+      _relayStore?.clear();
+    } else {
+      await _http?.close(force: true);
+    }
     server.clearTournament();
     hostPlayerId = null;
     hostToken = null;
-    await _http?.close(force: true);
     _http = null;
     lanIp = null;
-    await FlutterForegroundTask.stopService();
+    _transportError = null;
+    await _stopForegroundService();
     notifyListeners();
   }
 
@@ -738,7 +1078,12 @@ class HostController extends ChangeNotifier {
     // app-wide, and leaving a screen should not kill an in-progress event. Use
     // endEvent() to tear down.
     FlutterForegroundTask.removeTaskDataCallback(_onServiceData);
+    _hostingEnabled = false;
+    _transportGeneration++;
     _cloudUploadTimer?.cancel();
+    unawaited(_relayStateSubscription?.cancel());
+    final relay = _relay;
+    if (relay != null) unawaited(relay.dispose());
     if (cardSource case final ScryfallSource source) source.close();
     super.dispose();
   }

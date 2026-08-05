@@ -1,11 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Embedded LAN server: bind sockets, read network state, serve the PWA over http. -->
+    <!-- LAN server and outbound online relay transport. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
-    <!-- Keep the LAN server alive with the screen off (foreground service). -->
+    <!-- Keep the device-to-device tournament relay alive with the screen off. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <!-- Let the organizer exempt the app from Doze so the LAN server stays reachable off-screen. -->
@@ -13,6 +13,8 @@
     <application
         android:label="MTG Tournament"
         android:name="${applicationName}"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -42,10 +44,11 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-        <!-- flutter_foreground_task: keeps the embedded LAN server running while backgrounded. -->
+        <!-- Android's remoteMessaging type covers local servers that relay
+             messages across devices and is not subject to dataSync's 6-hour cap. -->
         <service
             android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
-            android:foregroundServiceType="dataSync"
+            android:foregroundServiceType="remoteMessaging"
             android:exported="false" />
     </application>
     <!-- Required to query activities that can process text, see:

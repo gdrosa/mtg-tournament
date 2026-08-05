@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../server/controller.dart';
+import '../shared/hosting.dart';
 import '../shared/models.dart';
 import '../shared/tournament_engine.dart';
 import 'app_scope.dart';
@@ -30,6 +31,7 @@ class EventsScreen extends StatelessWidget {
         _ActiveEventCard(
           engine: active,
           joinCode: c.server.joinCode,
+          connectionLabel: '${c.hostingMode.label} · ${c.hostingStatusLabel}',
           onOpen: () => Navigator.of(
             context,
           ).push(MaterialPageRoute(builder: (_) => const HostScreen())),
@@ -134,10 +136,12 @@ class EventsScreen extends StatelessWidget {
 class _ActiveEventCard extends StatelessWidget {
   final TournamentEngine engine;
   final String? joinCode;
+  final String connectionLabel;
   final VoidCallback onOpen;
   const _ActiveEventCard({
     required this.engine,
     required this.joinCode,
+    required this.connectionLabel,
     required this.onOpen,
   });
 
@@ -167,8 +171,8 @@ class _ActiveEventCard extends StatelessWidget {
         ),
         subtitle: Text(
           running
-              ? 'Round ${engine.rounds.length} of ${engine.plannedRounds} · ${engine.entries.length} players'
-              : 'Players joining${joinCode != null ? ' · code $joinCode' : ''}',
+              ? '$connectionLabel · Round ${engine.rounds.length} of ${engine.plannedRounds} · ${engine.entries.length} players'
+              : '$connectionLabel · Players joining${joinCode != null ? ' · code $joinCode' : ''}',
         ),
         trailing: Chip(
           label: Text(label),

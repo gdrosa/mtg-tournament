@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:pasteboard/pasteboard.dart';
 
 import '../host/host_controller.dart';
 import '../shared/models.dart';
@@ -88,7 +90,9 @@ class DecksScreen extends StatelessWidget {
       ),
     );
     if (ok != true || !context.mounted) return;
-    if (!c.server.deleteDeck(d.id)) {
+    if (c.server.deleteDeck(d.id)) {
+      await c.setDeckAvatar(d.id, null); // no orphaned picture files
+    } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text("Can't delete a deck that's in the current event."),
@@ -136,15 +140,7 @@ class _DeckCard extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           child: Row(
             children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primary.withValues(alpha: 0.18),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(Icons.style, color: theme.colorScheme.primary),
-              ),
+              _DeckAvatar(deck: deck),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -204,6 +200,110 @@ class _DeckCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Deck profile picture: tap it to set one from the clipboard or the gallery.
+/// Tapping here does not open the deck — the inner gesture wins the arena.
+class _DeckAvatar extends StatelessWidget {
+  final Deck deck;
+  const _DeckAvatar({required this.deck});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final c = AppScope.of(context);
+    final picture = c.deckAvatar(deck.id);
+    return GestureDetector(
+      onTap: () => _change(context, c, picture != null),
+      child: Container(
+        width: 44,
+        height: 44,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: theme.colorScheme.primary.withValues(alpha: 0.18),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: picture == null
+            ? Icon(Icons.style, color: theme.colorScheme.primary)
+            : Image.file(
+                picture,
+                fit: BoxFit.cover,
+                cacheWidth: 132, // 44dp at 3x — never decode a full photo
+                errorBuilder: (_, _, _) =>
+                    Icon(Icons.style, color: theme.colorScheme.primary),
+              ),
+      ),
+    );
+  }
+
+  Future<void> _change(
+    BuildContext context,
+    HostController c,
+    bool hasPicture,
+  ) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.content_paste),
+              title: const Text('Paste copied image'),
+              onTap: () => Navigator.pop(ctx, 'paste'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Choose from device'),
+              onTap: () => Navigator.pop(ctx, 'device'),
+            ),
+            if (hasPicture)
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('Remove picture'),
+                onTap: () => Navigator.pop(ctx, 'remove'),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null) return;
+
+    List<int>? bytes;
+    try {
+      switch (choice) {
+        case 'paste':
+          bytes = await Pasteboard.image;
+          if (bytes == null) {
+            if (context.mounted) _toast(context, 'No image in the clipboard.');
+            return;
+          }
+        case 'device':
+          // maxWidth/Height downscales in the picker, so a 12MP photo never
+          // reaches the device's storage as a 44px thumbnail.
+          final picked = await ImagePicker().pickImage(
+            source: ImageSource.gallery,
+            maxWidth: 512,
+            maxHeight: 512,
+          );
+          if (picked == null) return; // cancelled
+          bytes = await picked.readAsBytes();
+      }
+    } catch (_) {
+      if (context.mounted) _toast(context, 'Could not read that image.');
+      return;
+    }
+
+    final file = c.deckAvatar(deck.id);
+    await c.setDeckAvatar(deck.id, bytes);
+    // Same path, new content: drop the decoded frame or the old one sticks.
+    if (file != null) await FileImage(file).evict();
+  }
+
+  void _toast(BuildContext context, String message) =>
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
+      );
 }
 
 class _EmptyDecks extends StatelessWidget {

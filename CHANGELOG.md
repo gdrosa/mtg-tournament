@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Per-tournament Online or LAN hosting choice.
+- Free Cloudflare Worker/Durable Object relay for internet players.
+- Automatic host reconnection, room-scoped browser sessions, and online status UI.
+- Relay protocol, security, widget, persistence, and end-to-end smoke tests.
+- Profile export: share the local save (decks, history, stats) as gzipped JSON.
+- Deck profile pictures set from the clipboard or the device gallery.
+
+### Security
+
+- Restrict relayed traffic to player commands and bind commands to each virtual
+  browser connection's session token.
+- Replace unknown client-selected bearer tokens with server-generated UUIDs.
+- Keep online host credentials in local transport storage outside Drive backups.
+- Strip session tokens and the active join code from the shareable export.
+
 ## [0.0.1] - 2026-08-05
 
 ### Added

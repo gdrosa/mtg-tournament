@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mtg_tourney/server/controller.dart';
 import 'package:mtg_tourney/server/persistence.dart';
+import 'package:mtg_tourney/shared/hosting.dart';
 import 'package:mtg_tourney/shared/models.dart';
 
 void main() {
@@ -98,5 +99,47 @@ void main() {
 
     expect(c.importJson(jsonEncode(corrupt)), isFalse);
     expect(c.exportJson(), before);
+  });
+
+  test('online hosting mode survives a crash-resume round trip', () {
+    final store = MemoryPersistence();
+    final c = ServerController(rng: Random(31))..store = store;
+    final host = c.resolveSession('Host', null);
+    c.createTournament(
+      name: 'Internet Cup',
+      hostPlayerId: host.playerId,
+      mode: HostingMode.online,
+    );
+
+    final restored = ServerController()..store = store;
+    restored.loadFromStore();
+
+    expect(restored.hostingMode, HostingMode.online);
+  });
+
+  test('legacy active saves without a hosting mode resume as LAN', () {
+    final c = ServerController(rng: Random(32));
+    final host = c.resolveSession('Host', null);
+    c.createTournament(name: 'Legacy Cup', hostPlayerId: host.playerId);
+    final legacy = jsonDecode(c.exportJson()) as Map<String, dynamic>
+      ..remove('hostingMode');
+
+    final restored = ServerController();
+    expect(restored.importJson(jsonEncode(legacy)), isTrue);
+    expect(restored.hostingMode, HostingMode.lan);
+  });
+
+  test('ending an event clears its hosting mode', () {
+    final c = ServerController(rng: Random(33));
+    final host = c.resolveSession('Host', null);
+    c.createTournament(
+      name: 'Internet Cup',
+      hostPlayerId: host.playerId,
+      mode: HostingMode.online,
+    );
+
+    c.clearTournament();
+
+    expect(c.hostingMode, isNull);
   });
 }

@@ -72,7 +72,11 @@ Handler buildHandler(
   // ---- identity & decks ----
   api.post('/api/join', (Request r) async {
     final b = await _body(r);
-    final nickname = (b['nickname'] as String?)?.trim() ?? '';
+    final rawNickname = b['nickname'];
+    if (rawNickname is! String) {
+      return _json({'error': 'Nickname required.'}, status: 400);
+    }
+    final nickname = rawNickname.trim();
     if (nickname.isEmpty) {
       return _json({'error': 'Nickname required.'}, status: 400);
     }
@@ -83,29 +87,44 @@ Handler buildHandler(
     if (code != c.joinCode) {
       return _json({'error': 'Wrong event code.'}, status: 400);
     }
-    final s = c.resolveSession(nickname, b['token'] as String?);
-    return _json({'token': s.token, 'playerId': s.playerId});
+    return _guard(() {
+      final rawToken = b['token'];
+      if (rawToken != null && rawToken is! String) {
+        throw EngineError('Invalid session token.');
+      }
+      final s = c.resolveSession(nickname, rawToken as String?);
+      return {'token': s.token, 'playerId': s.playerId};
+    });
   });
 
   api.post('/api/deck', (Request r) async {
     final b = await _body(r);
-    final pid = c.playerIdForToken(b['token'] as String?);
+    final rawToken = b['token'];
+    final pid = c.playerIdForToken(rawToken is String ? rawToken : null);
     if (pid == null) return _json({'error': 'Not authenticated.'}, status: 401);
     // Never trust a client-supplied id: only honour it to edit a deck the caller
     // already owns, otherwise mint a fresh server uuid. This keeps deck ids to
     // server-generated uuids, so they can never carry an injection payload that
     // a client later reflects into the DOM.
-    final supplied = b['deckId'] as String?;
+    final supplied = b['deckId'] is String ? b['deckId'] as String : null;
     final deckId = (supplied != null && c.decks[supplied]?.ownerId == pid)
         ? supplied
         : null;
+    final rawName = b['name'];
+    final rawMainboard = b['mainboard'];
+    final rawSideboard = b['sideboard'];
+    if ((rawName != null && rawName is! String) ||
+        (rawMainboard != null && rawMainboard is! String) ||
+        (rawSideboard != null && rawSideboard is! String)) {
+      return _json({'error': 'Deck fields must be text.'}, status: 400);
+    }
     return _guard(() {
       final d = c.saveDeck(
         ownerId: pid,
         deckId: deckId,
-        name: (b['name'] as String?) ?? 'Unnamed',
-        mainboard: (b['mainboard'] as String?) ?? '',
-        sideboard: (b['sideboard'] as String?) ?? '',
+        name: (rawName as String?) ?? 'Unnamed',
+        mainboard: (rawMainboard as String?) ?? '',
+        sideboard: (rawSideboard as String?) ?? '',
       );
       return {'deckId': d.id};
     });

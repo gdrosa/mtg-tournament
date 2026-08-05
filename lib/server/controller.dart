@@ -11,12 +11,25 @@ import 'dart:math';
 import 'package:uuid/uuid.dart';
 
 import '../shared/cards.dart';
+import '../shared/hosting.dart';
 import '../shared/models.dart';
 import '../shared/stats.dart';
 import '../shared/tournament_engine.dart';
 import 'persistence.dart';
 
 const _uuid = Uuid();
+
+/// Semantic limits keep one browser from making every viewer snapshot too
+/// large to deliver. They apply to LAN and Online so both transports behave
+/// identically.
+const int maxNicknameLength = 64;
+const int maxTournamentNameLength = 120;
+const int maxDeckNameLength = 120;
+const int maxMainboardLength = 32 * 1024;
+const int maxSideboardLength = 16 * 1024;
+const int maxDecksPerPlayer = 64;
+const int maxTournamentPlayers = 128;
+const int maxStoredPlayers = 4096;
 
 /// A connected client (WebSocket) and the session it is viewing as.
 class Connection {
@@ -46,6 +59,7 @@ class ServerController {
   TournamentEngine? engine;
   String? joinCode; // short human code for the active event
   String? hostPlayerId;
+  HostingMode? hostingMode;
 
   // ---- live connections ----
   final Set<Connection> _connections = {};
@@ -70,15 +84,28 @@ class ServerController {
     String nickname,
     String? token,
   ) {
+    final normalizedNickname = nickname.trim();
+    if (normalizedNickname.isEmpty) throw EngineError('Nickname required.');
+    if (normalizedNickname.length > maxNicknameLength) {
+      throw EngineError(
+        'Nickname must be $maxNicknameLength characters or fewer.',
+      );
+    }
     if (token != null && _tokenToPlayer.containsKey(token)) {
       final pid = _tokenToPlayer[token]!;
       // allow a returning player to update their display nickname
-      players[pid] = Player(id: pid, nickname: nickname.trim());
+      players[pid] = Player(id: pid, nickname: normalizedNickname);
       return (token: token, playerId: pid);
     }
+    if (players.length >= maxStoredPlayers) {
+      throw EngineError('This device has reached its saved-player limit.');
+    }
     final pid = _uuid.v4();
-    final newToken = token ?? _uuid.v4();
-    players[pid] = Player(id: pid, nickname: nickname.trim());
+    // Never adopt an unknown client-supplied bearer token. Besides allowing a
+    // caller to choose credentials, that becomes especially dangerous once the
+    // player API is internet-facing through the online relay.
+    final newToken = _uuid.v4();
+    players[pid] = Player(id: pid, nickname: normalizedNickname);
     _tokenToPlayer[newToken] = pid;
     return (token: newToken, playerId: pid);
   }
@@ -112,12 +139,28 @@ class ServerController {
     required String mainboard,
     required String sideboard,
   }) {
+    final normalizedName = name.trim();
+    if (normalizedName.isEmpty) throw EngineError('Deck name required.');
+    if (normalizedName.length > maxDeckNameLength) {
+      throw EngineError(
+        'Deck name must be $maxDeckNameLength characters or fewer.',
+      );
+    }
+    if (mainboard.length > maxMainboardLength) {
+      throw EngineError('Maindeck text is too long.');
+    }
+    if (sideboard.length > maxSideboardLength) {
+      throw EngineError('Sideboard text is too long.');
+    }
+    if (deckId == null && decksOf(ownerId).length >= maxDecksPerPlayer) {
+      throw EngineError('A player can save at most $maxDecksPerPlayer decks.');
+    }
     final id = deckId ?? _uuid.v4();
     _requireEditableDeck(id);
     final deck = Deck(
       id: id,
       ownerId: ownerId,
-      name: name.trim(),
+      name: normalizedName,
       mainboardText: mainboard,
       sideboardText: sideboard,
     );
@@ -201,11 +244,20 @@ class ServerController {
   String createTournament({
     required String name,
     required String hostPlayerId,
+    HostingMode mode = HostingMode.lan,
   }) {
+    final normalizedName = name.trim();
+    if (normalizedName.isEmpty) throw EngineError('Tournament name required.');
+    if (normalizedName.length > maxTournamentNameLength) {
+      throw EngineError(
+        'Tournament name must be $maxTournamentNameLength characters or fewer.',
+      );
+    }
     this.hostPlayerId = hostPlayerId;
+    hostingMode = mode;
     engine = TournamentEngine(
       id: _uuid.v4(),
-      name: name,
+      name: normalizedName,
       createdAt: DateTime.now(),
       rng: _rng,
     );
@@ -233,6 +285,11 @@ class ServerController {
     // A player may only enter with a deck they own — mirrors the /api/deck guard,
     // so no one can seat themselves with (and later reveal) another player's list.
     if (deck.ownerId != playerId) throw EngineError('Not your deck.');
+    if (e.entries.length >= maxTournamentPlayers) {
+      throw EngineError(
+        'This tournament is limited to $maxTournamentPlayers players.',
+      );
+    }
     e.addEntry(playerId, deckId);
     _changed();
   }
@@ -328,6 +385,7 @@ class ServerController {
     'ownerToken': ownerToken,
     'hostPlayerId': hostPlayerId,
     'joinCode': joinCode,
+    'hostingMode': hostingMode?.name,
     'engine': engine?.toJson(),
     'archive': archive.map((e) => e.toJson()).toList(),
   };
@@ -376,13 +434,21 @@ class ServerController {
       final ci = CardInfo.fromJson(c as Map);
       nextCards[ci.id] = ci;
     }
-    (j['tokens'] as Map).forEach(
+    // Absent in a shared export, which strips session credentials.
+    (j['tokens'] as Map? ?? const {}).forEach(
       (k, v) => nextTokens[k as String] = v as String,
     );
     final nextOwnerPlayerId = j['ownerPlayerId'] as String?;
     final nextOwnerToken = j['ownerToken'] as String?;
     final nextHostPlayerId = j['hostPlayerId'] as String?;
     final nextJoinCode = j['joinCode'] as String?;
+    final modeName = j['hostingMode'] as String?;
+    final nextHostingMode = nextJoinCode == null
+        ? null
+        : modeName == null
+        ? HostingMode
+              .lan // backward-compatible active LAN saves
+        : HostingMode.values.byName(modeName);
     final nextEngine = j['engine'] == null
         ? null
         : TournamentEngine.fromJson(j['engine'] as Map, rng: _rng);
@@ -409,6 +475,7 @@ class ServerController {
     ownerToken = nextOwnerToken;
     hostPlayerId = nextHostPlayerId;
     joinCode = nextJoinCode;
+    hostingMode = nextHostingMode;
     engine = nextEngine;
   }
 
@@ -424,6 +491,7 @@ class ServerController {
     engine = null;
     joinCode = null;
     hostPlayerId = null;
+    hostingMode = null;
     _changed();
   }
 
@@ -672,6 +740,7 @@ class ServerController {
       'category': (info?.category ?? CardCategory.other).name,
       'board': board,
       'img': '/cards/img/${e.cardId}',
+      'remoteImg': info?.imageUrl ?? '',
     };
   }
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../host/host_controller.dart';
 import '../services/cloud_sync.dart';
+import '../services/export_data.dart';
 import '../shared/models.dart';
 import 'app_scope.dart';
 
@@ -172,6 +173,34 @@ class _ProfileBody extends StatelessWidget {
         ],
         const SizedBox(height: 24),
         const CloudCard(),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () async {
+            try {
+              await shareExport(controller.server);
+            } catch (_) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Could not export your data.')),
+                );
+              }
+            }
+          },
+          icon: const Icon(Icons.ios_share),
+          label: const Text('Export / share my data'),
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size.fromHeight(48),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Text(
+            'Saves or sends a compressed backup (decks, history and stats) to '
+            'any app. Session tokens are never included.',
+            style: theme.textTheme.bodySmall,
+            textAlign: TextAlign.center,
+          ),
+        ),
       ],
     );
   }

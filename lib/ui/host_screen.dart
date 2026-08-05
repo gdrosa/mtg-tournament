@@ -2,13 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../host/host_controller.dart';
+import '../shared/hosting.dart';
 import '../shared/models.dart';
 import '../shared/tournament_engine.dart';
 import 'app_scope.dart';
 import 'card_prep.dart';
 import 'deck_editor_screen.dart';
 
-/// The organizer's screen: create + host a LAN tournament and play in it.
+/// The organizer's screen: create a LAN or online tournament and play in it.
 class HostScreen extends StatefulWidget {
   const HostScreen({super.key});
   @override
@@ -70,6 +71,7 @@ class _HostScreenState extends State<HostScreen> {
       return _CreateForm(
         onCreate: _create,
         initialNick: c.server.owner?.nickname ?? '',
+        onlineConfigured: c.onlineHostingConfigured,
         existingDecks: ownerId == null
             ? const <Deck>[]
             : c.server.decksOf(ownerId),
@@ -77,16 +79,42 @@ class _HostScreenState extends State<HostScreen> {
     }
     if (c.hostingPaused) return _paused();
     final snap = c.snapshot;
-    switch (snap['phase']) {
-      case 'lobby':
-        return _lobby(snap);
-      case 'running':
-        return _running(snap);
-      case 'finished':
-        return _finished(snap);
-      default:
-        return const Center(child: CircularProgressIndicator());
-    }
+    final page = switch (snap['phase']) {
+      'lobby' => _lobby(snap),
+      'running' => _running(snap),
+      'finished' => _finished(snap),
+      _ => const Center(child: CircularProgressIndicator()),
+    };
+    if (c.isServing) return page;
+    return Column(
+      children: [
+        Material(
+          color: Theme.of(context).colorScheme.tertiaryContainer,
+          child: ListTile(
+            dense: true,
+            leading: c.transportError == null
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.warning_amber_rounded),
+            title: Text(c.hostingStatusLabel),
+            subtitle: c.transportError == null
+                ? Text(
+                    c.hostingMode == HostingMode.online
+                        ? 'The tournament is safe on this phone.'
+                        : 'Looking for a usable Wi-Fi address.',
+                  )
+                : Text(c.transportError!),
+            trailing: TextButton(
+              onPressed: () => _guard(() => c.retryHosting()),
+              child: const Text('Retry'),
+            ),
+          ),
+        ),
+        Expanded(child: page),
+      ],
+    );
   }
 
   // Shown after the organizer taps "Stop hosting" in the notification: the
@@ -110,7 +138,7 @@ class _HostScreenState extends State<HostScreen> {
               const SizedBox(height: 8),
               Text(
                 'Your tournament "${c.server.engine?.name ?? ''}" is saved. '
-                'Players can\'t reach it until you resume.',
+                'Players can\'t reach it until you resume ${c.hostingMode.label} hosting.',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium,
               ),
@@ -159,13 +187,14 @@ class _HostScreenState extends State<HostScreen> {
   Future<void> _create(
     String name,
     String nick, {
+    required HostingMode mode,
     String? existingDeckId,
     String deck = '',
     String main = '',
     String side = '',
   }) async {
     await _guard(() async {
-      await c.createEvent(name: name, nickname: nick);
+      await c.createEvent(name: name, nickname: nick, mode: mode);
       if (existingDeckId != null) {
         c.joinWithDeck(existingDeckId);
       } else {
@@ -178,6 +207,7 @@ class _HostScreenState extends State<HostScreen> {
   Widget _lobby(Map snap) {
     final players = (snap['players'] as List?) ?? [];
     final theme = Theme.of(context);
+    final joinUrl = c.joinUrl;
     return ListView(
       padding: EdgeInsets.fromLTRB(
         16,
@@ -192,21 +222,45 @@ class _HostScreenState extends State<HostScreen> {
             child: Column(
               children: [
                 Text('Players join at', style: theme.textTheme.bodyMedium),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
+                const SizedBox(height: 8),
+                Chip(
+                  avatar: Icon(
+                    c.hostingMode == HostingMode.online
+                        ? Icons.public
+                        : Icons.wifi,
+                    size: 18,
                   ),
-                  child: QrImageView(data: c.joinUrl, size: 200),
+                  label: Text(
+                    '${c.hostingMode.label} · ${c.hostingStatusLabel}',
+                  ),
                 ),
                 const SizedBox(height: 12),
-                SelectableText(
-                  c.joinUrl,
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.bodySmall,
-                ),
+                if (joinUrl != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: QrImageView(data: joinUrl, size: 200),
+                  ),
+                  const SizedBox(height: 12),
+                  SelectableText(
+                    joinUrl,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ] else ...[
+                  const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: CircularProgressIndicator(),
+                  ),
+                  Text(
+                    c.transportError ?? 'Preparing the join link…',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ],
                 const SizedBox(height: 8),
                 Text(
                   'Code: ${c.server.joinCode}',
@@ -217,7 +271,9 @@ class _HostScreenState extends State<HostScreen> {
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  'You can lock your screen — hosting keeps running.',
+                  c.hostingMode == HostingMode.online
+                      ? 'Players can join from anywhere. Keep this phone connected to the internet.'
+                      : 'Players must use the same Wi-Fi. Internet is not required.',
                   textAlign: TextAlign.center,
                   style: theme.textTheme.bodySmall,
                 ),
@@ -727,6 +783,7 @@ class _CreateForm extends StatefulWidget {
   final Future<void> Function(
     String name,
     String nick, {
+    required HostingMode mode,
     String? existingDeckId,
     String deck,
     String main,
@@ -734,10 +791,12 @@ class _CreateForm extends StatefulWidget {
   })
   onCreate;
   final String initialNick;
+  final bool onlineConfigured;
   final List<Deck> existingDecks;
   const _CreateForm({
     required this.onCreate,
     this.initialNick = '',
+    required this.onlineConfigured,
     this.existingDecks = const [],
   });
   @override
@@ -751,6 +810,7 @@ class _CreateFormState extends State<_CreateForm> {
   final main = TextEditingController();
   final side = TextEditingController();
   bool _busy = false;
+  HostingMode? _mode;
   // The owner's saved deck to play with; null = "create a new deck below".
   String? _selectedDeckId;
 
@@ -791,6 +851,37 @@ class _CreateFormState extends State<_CreateForm> {
           'You host on this phone and also play. Players join from their browser.',
         ),
         const SizedBox(height: 12),
+        Text('Connection', style: theme.textTheme.labelLarge),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ChoiceChip(
+              avatar: const Icon(Icons.public, size: 18),
+              label: const Text('Online'),
+              selected: _mode == HostingMode.online,
+              onSelected: (_) => setState(() => _mode = HostingMode.online),
+            ),
+            ChoiceChip(
+              avatar: const Icon(Icons.wifi, size: 18),
+              label: const Text('LAN'),
+              selected: _mode == HostingMode.lan,
+              onSelected: (_) => setState(() => _mode = HostingMode.lan),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(switch (_mode) {
+          HostingMode.online =>
+            widget.onlineConfigured
+                ? 'Players can join from anywhere. Everyone needs internet, and this phone remains the host.'
+                : 'Online hosting needs a relay URL in this app build. See docs/ONLINE_HOSTING.md.',
+          HostingMode.lan =>
+            'Players join on the same Wi-Fi. The tournament keeps working without internet.',
+          null => 'Choose how players will connect to this tournament.',
+        }, style: theme.textTheme.bodySmall),
+        const SizedBox(height: 12),
         _field('Event name', name, hint: 'e.g. Friday Night Modern'),
         _field('Your nickname', nick, hint: 'e.g. Giuseppe'),
         if (decks.isNotEmpty) ...[
@@ -823,7 +914,13 @@ class _CreateFormState extends State<_CreateForm> {
         const SizedBox(height: 12),
         FilledButton(
           onPressed: _busy ? null : _submit,
-          child: Text(_busy ? 'Starting server…' : 'Create & open lobby'),
+          child: Text(
+            _busy
+                ? _mode == HostingMode.online
+                      ? 'Opening online lobby…'
+                      : 'Starting LAN server…'
+                : 'Create & open lobby',
+          ),
         ),
       ],
     );
@@ -831,6 +928,20 @@ class _CreateFormState extends State<_CreateForm> {
 
   Future<void> _submit() async {
     final useExisting = _selectedDeckId != null;
+    if (_mode == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Choose Online or LAN hosting.')),
+      );
+      return;
+    }
+    if (_mode == HostingMode.online && !widget.onlineConfigured) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Online hosting is not configured in this app build.'),
+        ),
+      );
+      return;
+    }
     if (name.text.trim().isEmpty ||
         nick.text.trim().isEmpty ||
         (!useExisting && deck.text.trim().isEmpty)) {
@@ -848,12 +959,14 @@ class _CreateFormState extends State<_CreateForm> {
       await widget.onCreate(
         name.text.trim(),
         nick.text.trim(),
+        mode: _mode!,
         existingDeckId: _selectedDeckId,
       );
     } else {
       await widget.onCreate(
         name.text.trim(),
         nick.text.trim(),
+        mode: _mode!,
         deck: deck.text.trim(),
         main: main.text,
         side: side.text,
