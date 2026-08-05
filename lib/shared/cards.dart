@@ -148,38 +148,26 @@ class ParsedLine {
 
 final _qtyName = RegExp(r'^\s*(\d+)\s*[xX]?\s+(.+?)\s*$');
 final _setTag = RegExp(r'\s*\([A-Za-z0-9]{2,6}\)\s*[A-Za-z0-9]+\s*$');
-final _headers = {
-  'sideboard',
-  'side',
-  'maindeck',
-  'main',
-  'mainboard',
-  'deck',
-  'commander',
-};
 
 /// Parse a free-text decklist into (qty, name) lines. Accepts the common
-/// formats — "4 Lightning Bolt", "4x Lightning Bolt", "Lightning Bolt" (qty 1) —
-/// strips trailing "(SET) 123" printing tags, and skips blanks, comments
-/// (`#`/`//`) and section headers ("Sideboard", "Maindeck", …).
+/// formats "4 Lightning Bolt", "4x Lightning Bolt", and "4 x Lightning Bolt".
+/// Every card line must begin with a positive numeric quantity; blanks,
+/// comments, section headers, unquantified names, and other metadata are
+/// ignored. Trailing "(SET) 123" printing tags are stripped from valid lines.
 List<ParsedLine> parseDecklist(String text) {
   final out = <ParsedLine>[];
-  for (var raw in text.split('\n')) {
-    var line = raw.trim();
+  for (final raw in text.split('\n')) {
+    final line = raw.trim();
     if (line.isEmpty) continue;
     if (line.startsWith('#') || line.startsWith('//')) continue;
-    if (_headers.contains(line.toLowerCase())) continue;
-    line = line.replaceFirst('SB:', '').trim(); // MWS sideboard marker
-    line = line.replaceFirst(_setTag, '').trim();
-    if (line.isEmpty) continue;
     final m = _qtyName.firstMatch(line);
-    if (m != null) {
-      final qty = int.tryParse(m.group(1)!) ?? 1;
-      final name = m.group(2)!.trim();
-      if (name.isNotEmpty) out.add(ParsedLine(qty, name));
-    } else {
-      out.add(ParsedLine(1, line));
-    }
+    if (m == null) continue;
+
+    final qty = int.tryParse(m.group(1)!);
+    if (qty == null || qty <= 0) continue;
+
+    final name = m.group(2)!.replaceFirst(_setTag, '').trim();
+    if (name.isNotEmpty) out.add(ParsedLine(qty, name));
   }
   return out;
 }

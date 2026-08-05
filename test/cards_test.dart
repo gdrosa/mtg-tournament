@@ -31,25 +31,75 @@ void main() {
   });
 
   group('parseDecklist', () {
-    test('handles common formats, qty default, and skips noise', () {
+    test('accepts numeric quantities and common x formats', () {
       final lines = parseDecklist('''
 4 Lightning Bolt
 4x Goblin Guide
-Island
+4 x Monastery Swiftspear
+2X Eidolon of the Great Revel
 2 Lightning Bolt (2X2) 117
-
-# a comment
-// another
-Sideboard
-3 Smash to Smithereens
 ''');
       expect(lines.map((l) => '${l.qty} ${l.name}').toList(), [
         '4 Lightning Bolt',
         '4 Goblin Guide',
-        '1 Island',
+        '4 Monastery Swiftspear',
+        '2 Eidolon of the Great Revel',
         '2 Lightning Bolt', // printing tag stripped
-        '3 Smash to Smithereens', // "Sideboard" header skipped
       ]);
+    });
+
+    test('ignores headers, comments, metadata, and unquantified names', () {
+      final lines = parseDecklist('''
+[PLANESWALKER]
+Sideboard
+Island
+SB: 3 Smash to Smithereens
+Deck: Modern Burn
+0 Black Lotus
+-1 Lightning Bolt
+x Goblin Guide
+
+# a comment
+// another
+3 Smash to Smithereens
+''');
+      expect(lines.map((l) => '${l.qty} ${l.name}').toList(), [
+        '3 Smash to Smithereens',
+      ]);
+    });
+
+    test('does not parse localized ManaBox section headers as cards', () {
+      final lines = parseDecklist('''
+[PLANESWALKER]
+1 Teferi, Time Raveler
+
+[CREATURE]
+1 Overlord of the Balemurk
+4 Ragavan, Nimble Pilferer
+
+[ISTANTANEI]
+2 Consign to Memory
+4 Lightning Bolt
+
+[INCANTESIMI]
+4 Leyline Binding
+
+[TERRE]
+1 Mountain
+2 Steam Vents
+''');
+
+      expect(lines.map((line) => '${line.qty} ${line.name}').toList(), [
+        '1 Teferi, Time Raveler',
+        '1 Overlord of the Balemurk',
+        '4 Ragavan, Nimble Pilferer',
+        '2 Consign to Memory',
+        '4 Lightning Bolt',
+        '4 Leyline Binding',
+        '1 Mountain',
+        '2 Steam Vents',
+      ]);
+      expect(lines.map((line) => line.name), isNot(contains('[TERRE]')));
     });
   });
 
