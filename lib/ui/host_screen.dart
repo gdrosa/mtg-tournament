@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../host/host_controller.dart';
+import '../host/online_relay.dart';
 import '../shared/hosting.dart';
 import '../shared/models.dart';
 import '../shared/tournament_engine.dart';
@@ -194,13 +195,64 @@ class _HostScreenState extends State<HostScreen> {
     String side = '',
   }) async {
     await _guard(() async {
-      await c.createEvent(name: name, nickname: nick, mode: mode);
+      try {
+        await c.createEvent(name: name, nickname: nick, mode: mode);
+      } on RelayException catch (e) {
+        // The relay only refuses this way when the build's provisioning key is
+        // missing or revoked, and the organizer can fix it here and now.
+        if (!relayNeedsProvisionKey(e)) rethrow;
+        final key = await _askProvisionKey();
+        if (key == null) return; // cancelled: nothing was created
+        await c.setRelayProvisionKey(key);
+        await c.createEvent(name: name, nickname: nick, mode: mode);
+      }
       if (existingDeckId != null) {
         c.joinWithDeck(existingDeckId);
       } else {
         c.registerHostDeck(name: deck, main: main, side: side);
       }
     });
+  }
+
+  /// Ask for a relay provisioning key. Returns null when the organizer backs
+  /// out, in which case no online event is created.
+  Future<String?> _askProvisionKey() async {
+    final ctrl = TextEditingController(text: c.effectiveRelayProvisionKey);
+    final key = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Provisioning key needed'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'This relay no longer accepts the key built into the app. Ask '
+              'the relay owner for a current key, or host on LAN instead.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              decoration: const InputDecoration(labelText: 'Provisioning key'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('Use key'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    return (key == null || key.isEmpty) ? null : key;
   }
 
   // ---- lobby ----

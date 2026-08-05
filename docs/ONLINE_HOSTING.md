@@ -79,6 +79,13 @@ anyone who wants it. Its value is revocation, not secrecy: if a build is
 abused, remove that key and publish a new one, and every copy of the old build
 loses the ability to create rooms without moving the relay.
 
+When the relay rejects the key a build carries, creating an Online tournament
+asks the organizer for a current one instead of failing. The key they type is
+used from then on, is stored in `relay_provision_key.txt` outside both Drive
+and Android backups, and never enters the tournament JSON or a shared export.
+So revoking a key does not strand an installed app: whoever still has a valid
+key can type it in. LAN hosting is unaffected either way.
+
 ## Configure and build the app
 
 The relay address is a public build-time value, not a secret. Pass it, and the

@@ -284,6 +284,25 @@ void main() {
       expect(connectorCalled, isFalse);
       await client.dispose();
     });
+
+    test('only a rejected key asks the organizer for a provisioning key', () {
+      expect(
+        relayNeedsProvisionKey(
+          const RelayException('needs a key', statusCode: 401),
+        ),
+        isTrue,
+      );
+      // Everything else is retried or reported, never answered with a prompt.
+      expect(
+        relayNeedsProvisionKey(
+          const RelayException('rate limited', statusCode: 429),
+        ),
+        isFalse,
+      );
+      expect(relayNeedsProvisionKey(const RelayException('offline')), isFalse);
+      expect(relayNeedsProvisionKey(StateError('unrelated')), isFalse);
+      expect(relayNeedsProvisionKey(null), isFalse);
+    });
   });
 }
 

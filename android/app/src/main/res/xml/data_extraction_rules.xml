@@ -3,9 +3,13 @@
     <cloud-backup>
         <exclude domain="root" path="app_flutter/online_relay_session.json" />
         <exclude domain="file" path="online_relay_session.json" />
+        <exclude domain="root" path="app_flutter/relay_provision_key.txt" />
+        <exclude domain="file" path="relay_provision_key.txt" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="root" path="app_flutter/online_relay_session.json" />
         <exclude domain="file" path="online_relay_session.json" />
+        <exclude domain="root" path="app_flutter/relay_provision_key.txt" />
+        <exclude domain="file" path="relay_provision_key.txt" />
     </device-transfer>
 </data-extraction-rules>

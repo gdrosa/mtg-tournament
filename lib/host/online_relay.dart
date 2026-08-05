@@ -123,6 +123,12 @@ class OnlineRelaySession {
       _sameOrigin(Uri.parse(joinUrl), relayBaseUrl);
 }
 
+/// True when the relay refused to create a room because the build's
+/// provisioning key is missing, revoked, or wrong — the one relay failure the
+/// organizer can fix on the spot by entering a current key.
+bool relayNeedsProvisionKey(Object? error) =>
+    error is RelayException && error.statusCode == 401;
+
 abstract class OnlineRelaySessionStore {
   OnlineRelaySession? load();
 
@@ -521,8 +527,10 @@ class OnlineRelayClient {
 
   /// Provisioning key for relays that restrict who may create rooms. Not a
   /// secret in any real sense — it ships inside the APK — but it is revocable,
-  /// so an abused build can be cut off without moving the relay.
-  final String? provisionKey;
+  /// so an abused build can be cut off without moving the relay. Mutable: when
+  /// the built-in key is revoked the organizer can type a replacement without
+  /// reinstalling, and the next [provision] must use it.
+  String? provisionKey;
   final OnlineRelaySessionStore? store;
   final Duration connectTimeout;
   final Duration handshakeTimeout;

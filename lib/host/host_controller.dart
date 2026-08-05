@@ -42,6 +42,39 @@ class HostController extends ChangeNotifier {
   final ServerController server = ServerController();
   final String relayBaseUrl;
   final String relayProvisionKey;
+
+  // A key the organizer typed after the build's own key stopped being accepted
+  // (revoked, rotated, or absent in a self-built APK). Kept in its own file,
+  // never in the tournament JSON, so it cannot leak through a shared export.
+  String? _relayKeyPath;
+  String _storedRelayKey = '';
+
+  /// The provisioning key to present to the relay: whatever the organizer
+  /// entered most recently, otherwise the one compiled into this build.
+  String get effectiveRelayProvisionKey =>
+      _storedRelayKey.isNotEmpty ? _storedRelayKey : relayProvisionKey.trim();
+
+  /// Remember a provisioning key the organizer entered. An empty [key] clears
+  /// it and falls back to the build's own.
+  Future<void> setRelayProvisionKey(String key) async {
+    _storedRelayKey = key.trim();
+    _relay?.provisionKey = effectiveRelayProvisionKey;
+    final path = _relayKeyPath;
+    if (path != null) {
+      final file = File(path);
+      try {
+        if (_storedRelayKey.isEmpty) {
+          if (file.existsSync()) await file.delete();
+        } else {
+          await file.writeAsString(_storedRelayKey, flush: true);
+        }
+      } catch (_) {
+        // Storage is optional: the key still applies for this session.
+      }
+    }
+    notifyListeners();
+  }
+
   HttpServer? _http;
   OnlineRelayClient? _relay;
   OnlineRelaySessionStore? _relayStore;
@@ -208,6 +241,11 @@ class HostController extends ChangeNotifier {
       _relayStore = FileOnlineRelaySessionStore(
         '${dir.path}/online_relay_session.json',
       );
+      _relayKeyPath = '${dir.path}/relay_provision_key.txt';
+      final keyFile = File(_relayKeyPath!);
+      if (keyFile.existsSync()) {
+        _storedRelayKey = keyFile.readAsStringSync().trim();
+      }
       final imgDir = Directory('${dir.path}/card_images');
       _imageDirPath = imgDir.path;
       imageCache = CardImageCache(imgDir);
@@ -376,7 +414,11 @@ class HostController extends ChangeNotifier {
 
   OnlineRelayClient _onlineRelay() {
     final existing = _relay;
-    if (existing != null) return existing;
+    if (existing != null) {
+      // A key entered after the built-in one was revoked applies immediately.
+      existing.provisionKey = effectiveRelayProvisionKey;
+      return existing;
+    }
     if (!onlineHostingConfigured) {
       throw StateError(
         'Online hosting is not configured in this build. Set MTG_RELAY_URL '
@@ -386,7 +428,7 @@ class HostController extends ChangeNotifier {
     final relay = OnlineRelayClient(
       controller: server,
       baseUrl: Uri.parse(relayBaseUrl.trim()),
-      provisionKey: relayProvisionKey.trim(),
+      provisionKey: effectiveRelayProvisionKey,
       store: _relayStore ??= MemoryOnlineRelaySessionStore(),
     );
     _relayStateSubscription = relay.stateChanges.listen((state) {
@@ -502,6 +544,10 @@ class HostController extends ChangeNotifier {
   }
 
   String _friendlyTransportError(Object error) {
+    if (relayNeedsProvisionKey(error)) {
+      return 'This relay needs a current provisioning key. Start the event '
+          'again to enter one.';
+    }
     final text = error.toString();
     return text.replaceFirst('Bad state: ', '').replaceFirst('Exception: ', '');
   }

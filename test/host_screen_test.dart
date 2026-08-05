@@ -91,4 +91,25 @@ void main() {
       findsOneWidget,
     );
   });
+
+  test(
+    'a typed provisioning key overrides the one built into the app',
+    () async {
+      final controller = HostController(
+        cloud: _NoCloud(),
+        relayProvisionKey: 'built-in-key',
+      );
+      addTearDown(controller.dispose);
+      await controller.init();
+
+      expect(controller.effectiveRelayProvisionKey, 'built-in-key');
+
+      await controller.setRelayProvisionKey('  typed-key  ');
+      expect(controller.effectiveRelayProvisionKey, 'typed-key');
+
+      // Clearing it falls back to the build's own key rather than sending none.
+      await controller.setRelayProvisionKey('');
+      expect(controller.effectiveRelayProvisionKey, 'built-in-key');
+    },
+  );
 }

@@ -8,6 +8,8 @@ All notable changes to this project are documented here.
 
 - Restrict relay room creation to builds carrying a provisioning key, with
   `cloudflare/keys.mjs` to issue and revoke keys.
+- Ask the organizer for a provisioning key when the relay rejects the build's
+  own, so revoking a key does not strand installed apps.
 
 ## [0.0.2] - 2026-08-05
 

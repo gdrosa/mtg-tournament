@@ -3,4 +3,6 @@
     <!-- Relay host credentials are short-lived and device-specific. -->
     <exclude domain="root" path="app_flutter/online_relay_session.json" />
     <exclude domain="file" path="online_relay_session.json" />
+    <exclude domain="root" path="app_flutter/relay_provision_key.txt" />
+    <exclude domain="file" path="relay_provision_key.txt" />
 </full-backup-content>
