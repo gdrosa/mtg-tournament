@@ -1,0 +1,6 @@
+# Copy this file to android/key.properties and replace every placeholder.
+# Keep key.properties and the keystore private; both are ignored by Git.
+storePassword=CHANGE_ME
+keyPassword=CHANGE_ME
+keyAlias=mtg-tourney
+storeFile=../path/to/mtg-tourney-upload.jks

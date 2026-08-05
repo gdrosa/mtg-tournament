@@ -1,0 +1,50 @@
+name: mtg_tourney
+description: "Offline-first LAN tournament manager for Magic: The Gathering."
+publish_to: none
+version: 0.0.1+1
+
+environment:
+  sdk: ^3.12.2
+  flutter: 3.44.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Embedded LAN server and browser-client transport.
+  shelf: ^1.4.0
+  shelf_router: ^1.1.0
+  shelf_web_socket: ^3.0.0
+  shelf_static: ^1.1.0
+  web_socket_channel: ^3.0.0
+
+  # Host-side utilities.
+  uuid: ^4.6.0
+  qr_flutter: ^4.1.0
+  path_provider: ^2.1.6
+  flutter_foreground_task: ^8.0.0
+
+  # Optional backup to the user's private Google Drive appDataFolder.
+  google_sign_in: ^6.2.1
+  googleapis: ^13.0.0
+  extension_google_sign_in_as_googleapis_auth: ^2.0.12
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.0
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: assets/launcher_legacy.png
+  min_sdk_android: 24
+  adaptive_icon_background: "#0F1218"
+  adaptive_icon_foreground: assets/launcher_foreground.png
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/web/
+    - assets/app_logo.png
