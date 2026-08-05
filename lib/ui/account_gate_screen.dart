@@ -63,9 +63,10 @@ class _AccountGateScreenState extends State<AccountGateScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Sign in with Google to save your decks, profile and history to your '
-                'own Google Drive — so you keep them if you reinstall. Or play as a '
-                'guest with everything stored only on this phone.',
+                'Sign in with Google to use your Google profile name as your '
+                'editable nickname and save your decks, profile and history to '
+                'your own Google Drive — so you keep them if you reinstall. Or '
+                'play as a guest with everything stored only on this phone.',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium,
               ),

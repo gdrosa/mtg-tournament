@@ -78,7 +78,21 @@ String cloudErrorMessage(Object error) {
       'connection and try again.';
 }
 
-class DriveCloudSync {
+/// Cloud-backup boundary used by [DriveCloudSync] in production and by
+/// controller fakes in tests.
+abstract interface class CloudSync {
+  bool get isSignedIn;
+  String? get email;
+  String? get displayName;
+
+  Future<bool> signInSilently();
+  Future<bool> signIn();
+  Future<void> signOut();
+  Future<String?> download();
+  Future<void> upload(String data);
+}
+
+class DriveCloudSync implements CloudSync {
   static const _fileName = 'mtg_tourney_backup.json';
 
   // driveAppdataScope = access ONLY to this app's hidden folder, nothing else in
@@ -87,12 +101,18 @@ class DriveCloudSync {
     scopes: const [drive.DriveApi.driveAppdataScope],
   );
 
+  @override
   bool get isSignedIn => _gsi.currentUser != null;
+
+  @override
   String? get email => _gsi.currentUser?.email;
+
+  @override
   String? get displayName => _gsi.currentUser?.displayName;
 
   /// Resume a prior session without UI (call at startup). Safe offline: returns
   /// false on any failure.
+  @override
   Future<bool> signInSilently() async {
     try {
       return (await _gsi.signInSilently()) != null;
@@ -102,11 +122,13 @@ class DriveCloudSync {
   }
 
   /// Interactive sign-in (shows the Google account picker). Returns true on success.
+  @override
   Future<bool> signIn() async {
     final account = await _gsi.signIn(); // null if the user cancels
     return account != null;
   }
 
+  @override
   Future<void> signOut() => _gsi.signOut();
 
   Future<drive.DriveApi> _api() async {
@@ -128,6 +150,7 @@ class DriveCloudSync {
   }
 
   /// Download the saved blob, or null if the account has no backup yet.
+  @override
   Future<String?> download() async {
     final api = await _api();
     final id = await _backupFileId(api);
@@ -148,6 +171,7 @@ class DriveCloudSync {
   /// Create or overwrite the backup blob (last-write-wins).
   // ponytail: last-write-wins is fine for one primary device; add a modifiedTime
   // merge only if multi-device editing becomes a real use case.
+  @override
   Future<void> upload(String data) async {
     final api = await _api();
     final bytes = utf8.encode(data);

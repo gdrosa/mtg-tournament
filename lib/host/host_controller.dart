@@ -49,7 +49,7 @@ class HostController extends ChangeNotifier {
   bool get canEditCards => imageCache != null;
 
   // ---- Google account cloud backup (optional) ----
-  final DriveCloudSync cloud = DriveCloudSync();
+  final CloudSync cloud;
   // True once the user has picked "sign in" or "continue as guest" this launch —
   // dismisses the start-up account gate.
   bool _accountChosen = false;
@@ -60,7 +60,7 @@ class HostController extends ChangeNotifier {
   /// A silent Google session alone must not bypass restore after a reinstall.
   bool get needsAccountGate => ready && server.owner == null && !_accountChosen;
 
-  HostController() {
+  HostController({CloudSync? cloud}) : cloud = cloud ?? DriveCloudSync() {
     server.onChange = _onServerChanged;
     server.onDeckSaved = _onDeckSaved;
   }
@@ -194,14 +194,35 @@ class HostController extends ChangeNotifier {
 
   Future<void> _syncSignedInAccount() async {
     final remote = await cloud.download();
-    if (remote != null && remote.trim().isNotEmpty) {
+    final hadRemote = remote != null && remote.trim().isNotEmpty;
+    if (hadRemote) {
       if (!server.importJson(remote)) {
         throw const FormatException('Invalid Google Drive backup.');
       }
       hostPlayerId = server.hostPlayerId;
       hostToken = server.ownerToken;
-    } else {
+    }
+
+    var createdGoogleOwner = false;
+    if (server.owner == null) {
+      final googleName = cloud.displayName?.trim() ?? '';
+      if (googleName.isNotEmpty) {
+        server.ensureOwner(googleName);
+        server.persistAndNotify();
+        createdGoogleOwner = true;
+      }
+    }
+
+    // Seed a new backup, or repair an older ownerless backup with the Google
+    // profile name. Existing cloud/custom nicknames are never overwritten.
+    if (!hadRemote || createdGoogleOwner) {
       await cloud.upload(server.exportJson());
+      if (createdGoogleOwner) {
+        // [persistAndNotify] scheduled the same blob; the explicit upload above
+        // has already completed it.
+        _cloudUploadTimer?.cancel();
+        _cloudUploadTimer = null;
+      }
     }
   }
 
