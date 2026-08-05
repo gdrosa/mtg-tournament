@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Security
+
+- Restrict relay room creation to builds carrying a provisioning key, with
+  `cloudflare/keys.mjs` to issue and revoke keys.
+
 ## [0.0.2] - 2026-08-05
 
 ### Added

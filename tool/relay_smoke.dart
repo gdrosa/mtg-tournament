@@ -2,7 +2,7 @@
 ///
 /// Start `npm run dev` in `cloudflare/`, then run:
 ///
-///   dart run tool/relay_smoke.dart http://127.0.0.1:8787
+///   dart run tool/relay_smoke.dart http://127.0.0.1:8787 [provisioning-key]
 library;
 
 import 'dart:async';
@@ -16,8 +16,9 @@ import 'package:web_socket_channel/io.dart';
 
 Future<void> main(List<String> arguments) async {
   final baseUrl = Uri.parse(
-    arguments.isEmpty ? 'http://127.0.0.1:8787' : arguments.single,
+    arguments.isEmpty ? 'http://127.0.0.1:8787' : arguments.first,
   );
+  final provisionKey = arguments.length > 1 ? arguments[1] : null;
   final controller = ServerController();
   final host = controller.resolveSession('Smoke-test host', null);
   controller.createTournament(
@@ -29,6 +30,7 @@ Future<void> main(List<String> arguments) async {
   final relay = OnlineRelayClient(
     controller: controller,
     baseUrl: baseUrl,
+    provisionKey: provisionKey,
     store: MemoryOnlineRelaySessionStore(),
   );
   IOWebSocketChannel? player;

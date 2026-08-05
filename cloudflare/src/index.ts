@@ -26,6 +26,9 @@ interface Env {
   ROOMS: DurableObjectNamespace<RelayRoom>;
   PROVISION_LIMITERS: DurableObjectNamespace<ProvisionLimiter>;
   ASSETS: Fetcher;
+  /// Comma-separated list of accepted provisioning keys, set with
+  /// `wrangler secret put PROVISION_KEYS`. Unset means anyone may create rooms.
+  PROVISION_KEYS?: string;
 }
 
 interface RoomMeta {
@@ -965,6 +968,21 @@ async function applyProvisionLimit(
   return response.ok ? null : response;
 }
 
+/// Provisioning keys gate who may create rooms. The relay stays open while
+/// PROVISION_KEYS is unset, which is what `wrangler dev` and the tests use; a
+/// deployment that should not host strangers must set the secret.
+/// ponytail: a comma-separated secret, not a database — `keys.mjs` rewrites the
+/// whole list, and revoking one is a redeploy of that secret.
+function provisionKeyAccepted(request: Request, env: Env): boolean {
+  const configured = (env.PROVISION_KEYS ?? "")
+    .split(",")
+    .map((key) => key.trim())
+    .filter((key) => key.length > 0);
+  if (configured.length === 0) return true;
+  const presented = request.headers.get("x-mtg-relay-key") ?? "";
+  return configured.some((key) => constantTimeEqual(key, presented));
+}
+
 async function provisionRoom(request: Request, env: Env): Promise<Response> {
   if (request.headers.has("origin")) {
     return errorResponse(
@@ -996,6 +1014,16 @@ async function provisionRoom(request: Request, env: Env): Promise<Response> {
   const contentLength = Number(request.headers.get("content-length") ?? "0");
   if (Number.isFinite(contentLength) && contentLength > 1024) {
     return errorResponse(413, "request_too_large", "Request body is too large");
+  }
+
+  // Checked before the rate limiter so unauthorized traffic is the cheapest
+  // path through the Worker and cannot exhaust a legitimate organizer's budget.
+  if (!provisionKeyAccepted(request, env)) {
+    return errorResponse(
+      401,
+      "provision_key_required",
+      "This relay requires a provisioning key",
+    );
   }
 
   const limited = await applyProvisionLimit(request, env);

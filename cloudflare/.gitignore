@@ -1,4 +1,5 @@
 node_modules/
+provision-keys.txt
 .wrangler/
 .wrangler-dry-run/
 coverage/

@@ -518,6 +518,11 @@ typedef RelayChannelConnector = WebSocketChannel Function(Uri uri);
 class OnlineRelayClient {
   final ServerController controller;
   final Uri baseUrl;
+
+  /// Provisioning key for relays that restrict who may create rooms. Not a
+  /// secret in any real sense — it ships inside the APK — but it is revocable,
+  /// so an abused build can be cut off without moving the relay.
+  final String? provisionKey;
   final OnlineRelaySessionStore? store;
   final Duration connectTimeout;
   final Duration handshakeTimeout;
@@ -552,6 +557,7 @@ class OnlineRelayClient {
   OnlineRelayClient({
     required this.controller,
     required this.baseUrl,
+    this.provisionKey,
     this.store,
     this.connectTimeout = const Duration(seconds: 12),
     this.handshakeTimeout = const Duration(seconds: 8),
@@ -601,6 +607,10 @@ class OnlineRelayClient {
       request = await _httpClient.postUrl(uri).timeout(connectTimeout);
       request.headers.contentType = ContentType.json;
       request.headers.set('x-mtg-relay-protocol', '$relayProtocolVersion');
+      final key = provisionKey;
+      if (key != null && key.isNotEmpty) {
+        request.headers.set('x-mtg-relay-key', key);
+      }
       request.write('{}');
       final response = await request.close().timeout(connectTimeout);
       final text = await _readHttpResponse(response, _defaultMaxFrameBytes);

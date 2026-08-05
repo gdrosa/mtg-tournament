@@ -40,7 +40,7 @@ For a local protocol smoke test, start `npm run dev` and then run this from the
 repository root:
 
 ```shell
-dart run tool/relay_smoke.dart http://127.0.0.1:8787
+dart run tool/relay_smoke.dart http://127.0.0.1:8787 [provisioning-key]
 ```
 
 Cloudflare's official references:
@@ -50,14 +50,43 @@ Cloudflare's official references:
 - [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/)
 - [`workers.dev` routes](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/)
 
-## Configure and build the app
+## Provisioning keys
 
-The relay address is a public build-time value, not a secret. Pass it when
-running or building Flutter:
+A freshly deployed relay lets **anyone** create rooms: the URL is readable
+inside any APK built against it, and `POST /v1/rooms` needs no credentials.
+Rate limiting (20 rooms per IP per hour) and 24-hour room expiry are the only
+brakes. On the Workers Free plan the worst case is exhausted quota — requests
+start failing, no bill arrives — but the relay is still a public WebSocket
+service running under your Cloudflare account.
+
+Set provisioning keys to restrict who may create rooms:
 
 ```shell
-flutter run --dart-define=MTG_RELAY_URL=https://mtg-tournament-relay.<your-subdomain>.workers.dev
-flutter build apk --release --dart-define=MTG_RELAY_URL=https://mtg-tournament-relay.<your-subdomain>.workers.dev
+cd cloudflare
+node keys.mjs add            # generates and installs a key, prints it
+node keys.mjs list
+node keys.mjs remove <key>   # revokes it; builds carrying it stop working
+```
+
+The list is stored in the `PROVISION_KEYS` Worker secret and mirrored in
+`cloudflare/provision-keys.txt`, which is gitignored and is your only readable
+copy — Cloudflare secrets cannot be read back. **While no key is configured the
+relay stays open to everyone**, which is what `wrangler dev` and the test suite
+rely on.
+
+A key travels inside the APK, so a published build's key is extractable by
+anyone who wants it. Its value is revocation, not secrecy: if a build is
+abused, remove that key and publish a new one, and every copy of the old build
+loses the ability to create rooms without moving the relay.
+
+## Configure and build the app
+
+The relay address is a public build-time value, not a secret. Pass it, and the
+provisioning key if the relay has any, when running or building Flutter:
+
+```shell
+flutter run --dart-define=MTG_RELAY_URL=https://mtg-tournament-relay.<your-subdomain>.workers.dev --dart-define=MTG_RELAY_KEY=<key>
+flutter build apk --release --dart-define=MTG_RELAY_URL=https://mtg-tournament-relay.<your-subdomain>.workers.dev --dart-define=MTG_RELAY_KEY=<key>
 ```
 
 Without `MTG_RELAY_URL`, LAN tournaments continue to work and the app explains

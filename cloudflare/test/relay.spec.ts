@@ -5,6 +5,7 @@ import { LIMITS, type RelayRoom } from "../src/index";
 
 interface TestEnv {
   ASSETS: Fetcher;
+  PROVISION_KEYS?: string;
   PROVISION_LIMITERS: DurableObjectNamespace;
   ROOMS: DurableObjectNamespace<RelayRoom>;
 }
@@ -219,6 +220,41 @@ describe("room provisioning", () => {
     await expect(missingProtocol.json()).resolves.toMatchObject({
       error: { code: "protocol_required" },
     });
+  });
+
+  it("rejects room creation without a configured provisioning key", async () => {
+    const endpoint = "https://relay.test/v1/rooms";
+    const attempt = (key?: string) =>
+      SELF.fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "CF-Connecting-IP": `test-${crypto.randomUUID()}`,
+          "Content-Type": "application/json",
+          "X-MTG-Relay-Protocol": "1",
+          ...(key === undefined ? {} : { "X-MTG-Relay-Key": key }),
+        },
+        body: "{}",
+      });
+
+    env.PROVISION_KEYS = "alpha-key, beta-key";
+    try {
+      const missing = await attempt();
+      expect(missing.status).toBe(401);
+      await expect(missing.json()).resolves.toMatchObject({
+        error: { code: "provision_key_required" },
+      });
+
+      expect((await attempt("gamma-key")).status).toBe(401);
+      expect((await attempt("")).status).toBe(401);
+      expect((await attempt("alpha")).status).toBe(401); // a prefix is not a key
+      expect((await attempt("alpha-key")).status).toBe(201);
+      expect((await attempt("beta-key")).status).toBe(201); // every listed key works
+    } finally {
+      delete env.PROVISION_KEYS;
+    }
+
+    // Unset again: local development and LAN-only deployments stay open.
+    expect((await attempt()).status).toBe(201);
   });
 
   it("creates an unguessable room and stores only the host-secret hash", async () => {

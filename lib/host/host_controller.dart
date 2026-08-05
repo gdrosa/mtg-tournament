@@ -28,6 +28,10 @@ import 'static_assets.dart';
 
 const _configuredRelayUrl = String.fromEnvironment('MTG_RELAY_URL');
 
+/// Provisioning key for a relay that restricts room creation. Public in the
+/// APK, but revocable: see cloudflare/keys.mjs.
+const _configuredRelayKey = String.fromEnvironment('MTG_RELAY_KEY');
+
 /// The Stop button shown in the foreground-service notification (FR: organizer
 /// can stop hosting from the notification shade without opening the app).
 const List<NotificationButton> _notificationButtons = [
@@ -37,6 +41,7 @@ const List<NotificationButton> _notificationButtons = [
 class HostController extends ChangeNotifier {
   final ServerController server = ServerController();
   final String relayBaseUrl;
+  final String relayProvisionKey;
   HttpServer? _http;
   OnlineRelayClient? _relay;
   OnlineRelaySessionStore? _relayStore;
@@ -98,8 +103,11 @@ class HostController extends ChangeNotifier {
   /// A silent Google session alone must not bypass restore after a reinstall.
   bool get needsAccountGate => ready && server.owner == null && !_accountChosen;
 
-  HostController({CloudSync? cloud, this.relayBaseUrl = _configuredRelayUrl})
-    : cloud = cloud ?? DriveCloudSync() {
+  HostController({
+    CloudSync? cloud,
+    this.relayBaseUrl = _configuredRelayUrl,
+    this.relayProvisionKey = _configuredRelayKey,
+  }) : cloud = cloud ?? DriveCloudSync() {
     server.onChange = _onServerChanged;
     server.onDeckSaved = _onDeckSaved;
   }
@@ -378,6 +386,7 @@ class HostController extends ChangeNotifier {
     final relay = OnlineRelayClient(
       controller: server,
       baseUrl: Uri.parse(relayBaseUrl.trim()),
+      provisionKey: relayProvisionKey.trim(),
       store: _relayStore ??= MemoryOnlineRelaySessionStore(),
     );
     _relayStateSubscription = relay.stateChanges.listen((state) {
