@@ -56,9 +56,9 @@ class HostController extends ChangeNotifier {
   Timer? _cloudUploadTimer;
 
   /// Show the "Sign in with Google / continue as guest" gate only at the very
-  /// start: no durable profile yet, no choice made, and not already signed in.
-  bool get needsAccountGate =>
-      ready && server.owner == null && !_accountChosen && !cloud.isSignedIn;
+  /// start: no durable profile yet and no completed choice/sync this launch.
+  /// A silent Google session alone must not bypass restore after a reinstall.
+  bool get needsAccountGate => ready && server.owner == null && !_accountChosen;
 
   HostController() {
     server.onChange = _onServerChanged;
@@ -135,18 +135,31 @@ class HostController extends ChangeNotifier {
     ready = true;
     notifyListeners();
     // Resume a prior Google session in the BACKGROUND — never block app startup
-    // on a network call (offline-first). We do NOT download here; on-disk state is
-    // the working copy at launch and the explicit sign-in path re-fetches data.
+    // on a network call (offline-first). When local durable state is empty (for
+    // example after a reinstall), restore before dismissing the account gate.
     unawaited(_resumeCloudSession());
   }
 
   Future<void> _resumeCloudSession() async {
     try {
       if (await cloud.signInSilently()) {
-        notifyListeners(); // reflect signed-in state
+        if (server.owner == null) {
+          await _syncSignedInAccount();
+          _accountChosen = true;
+        }
+        notifyListeners();
       }
     } catch (_) {
-      /* offline / not configured — guest still works */
+      // Do not let a half-restored account bypass the first-run gate. The user
+      // can retry interactively or continue as a guest.
+      if (server.owner == null) {
+        try {
+          await cloud.signOut();
+        } catch (_) {
+          // Best effort only; [_accountChosen] still keeps the gate visible.
+        }
+        notifyListeners();
+      }
     }
   }
 
@@ -162,20 +175,34 @@ class HostController extends ChangeNotifier {
     final ok = await cloud.signIn();
     if (!ok) return false;
     try {
-      final remote = await cloud.download();
-      if (remote != null && remote.trim().isNotEmpty) {
-        server.importJson(remote); // restore decks / profile / history
-      } else {
-        await cloud.upload(
-          server.exportJson(),
-        ); // first backup for this account
+      await _syncSignedInAccount();
+    } catch (error, stackTrace) {
+      // Authentication without a usable Drive backup is not a successful sync.
+      // Return to a clean signed-out state so the gate/Profile can retry.
+      try {
+        await cloud.signOut();
+      } catch (_) {
+        // Preserve and report the original sync error.
       }
-    } catch (_) {
-      // network hiccup — stay signed in; a later change/backupNow will sync.
+      notifyListeners();
+      Error.throwWithStackTrace(error, stackTrace);
     }
     _accountChosen = true;
     notifyListeners();
     return true;
+  }
+
+  Future<void> _syncSignedInAccount() async {
+    final remote = await cloud.download();
+    if (remote != null && remote.trim().isNotEmpty) {
+      if (!server.importJson(remote)) {
+        throw const FormatException('Invalid Google Drive backup.');
+      }
+      hostPlayerId = server.hostPlayerId;
+      hostToken = server.ownerToken;
+    } else {
+      await cloud.upload(server.exportJson());
+    }
   }
 
   /// Dismiss the start gate and use the app without cloud backup.

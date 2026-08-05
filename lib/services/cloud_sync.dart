@@ -12,34 +12,70 @@ library;
 import 'dart:convert';
 
 import 'package:extension_google_sign_in_as_googleapis_auth/extension_google_sign_in_as_googleapis_auth.dart';
+import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
+
+bool _hasGoogleStatus(Object error, int status) {
+  final details = error is PlatformException
+      ? '${error.message ?? ''} ${error.details ?? ''}'
+      : error.toString();
+  return RegExp(
+    '(?:ApiException|[\\w.]+)\\s*:\\s*$status\\b',
+    caseSensitive: false,
+  ).hasMatch(details);
+}
 
 /// Turn a raw sign-in error into an honest, actionable message. The most common
 /// failure is NOT a network problem: `ApiException: 10` (DEVELOPER_ERROR) means
 /// the Google OAuth client / SHA-1 for this app isn't configured yet. Returns ''
 /// for a plain user cancel (no message needed).
-String cloudErrorMessage(Object e) {
-  final s = e.toString();
-  if (s.contains('ApiException: 10') ||
-      s.contains('DEVELOPER_ERROR') ||
-      s.contains(': 10,')) {
-    return 'Google sign-in isn\'t set up for this app yet (its OAuth client / SHA-1 in '
-        'Google Cloud). This is NOT a connection problem — finish that one-time setup, '
-        'or use the app as a guest.';
+String cloudErrorMessage(Object error) {
+  final code = error is PlatformException ? error.code.toLowerCase() : '';
+  final raw = error.toString();
+  final normalized = '$code $raw'.toLowerCase();
+
+  if (code == GoogleSignIn.kSignInCanceledError ||
+      _hasGoogleStatus(error, 12501) ||
+      normalized.contains('sign_in_cancelled') ||
+      normalized.contains('sign_in_canceled')) {
+    return ''; // User cancelled — nothing to report.
   }
-  if (s.contains('ApiException: 7') || s.contains('NETWORK_ERROR')) {
+
+  if (_hasGoogleStatus(error, 10) || normalized.contains('developer_error')) {
+    return 'Google sign-in is not configured for this APK. Register package '
+        'com.giuseppe.mtg.mtg_tourney and its signing SHA-1 as an Android OAuth '
+        'client in Google Cloud, then try again. You can continue as a guest.';
+  }
+
+  if (code == GoogleSignIn.kNetworkError ||
+      _hasGoogleStatus(error, 7) ||
+      normalized.contains('network_error')) {
     return 'Network error reaching Google. Check your connection and try again.';
   }
-  if (s.contains('12501') ||
-      s.contains('SIGN_IN_CANCELLED') ||
-      s.toLowerCase().contains('cancel')) {
-    return ''; // user cancelled — nothing to report
+
+  if (normalized.contains('accessnotconfigured') ||
+      normalized.contains('service_disabled') ||
+      normalized.contains('permission_denied') ||
+      normalized.contains('drive api has not been used')) {
+    return 'Google sign-in succeeded, but Drive backup is unavailable. Enable '
+        'the Google Drive API and the drive.appdata scope in the same Google '
+        'Cloud project.';
   }
-  if (s.contains('ApiException')) {
-    return 'Google sign-in failed ($s). It may be the OAuth setup; you can continue as guest.';
+
+  if (error is FormatException) {
+    return 'The Google Drive backup is invalid or incompatible, so local data '
+        'was left unchanged.';
   }
-  return 'Couldn\'t sign in: $s';
+
+  if (code == GoogleSignIn.kSignInFailedError ||
+      normalized.contains('apiexception')) {
+    return 'Google sign-in failed. Verify the Android OAuth package and signing '
+        'SHA-1 configuration, or continue as a guest.';
+  }
+
+  return 'Google Drive backup failed. Your local data is unchanged; check your '
+      'connection and try again.';
 }
 
 class DriveCloudSync {
@@ -73,9 +109,12 @@ class DriveCloudSync {
 
   Future<void> signOut() => _gsi.signOut();
 
-  Future<drive.DriveApi?> _api() async {
+  Future<drive.DriveApi> _api() async {
     final client = await _gsi.authenticatedClient();
-    return client == null ? null : drive.DriveApi(client);
+    if (client == null) {
+      throw StateError('Google Drive authorization was not granted.');
+    }
+    return drive.DriveApi(client);
   }
 
   Future<String?> _backupFileId(drive.DriveApi api) async {
@@ -91,7 +130,6 @@ class DriveCloudSync {
   /// Download the saved blob, or null if the account has no backup yet.
   Future<String?> download() async {
     final api = await _api();
-    if (api == null) return null;
     final id = await _backupFileId(api);
     if (id == null) return null;
     final media =
@@ -112,7 +150,6 @@ class DriveCloudSync {
   // merge only if multi-device editing becomes a real use case.
   Future<void> upload(String data) async {
     final api = await _api();
-    if (api == null) return;
     final bytes = utf8.encode(data);
     final media = drive.Media(
       Stream.value(bytes),

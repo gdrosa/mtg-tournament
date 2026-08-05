@@ -231,7 +231,7 @@ class _CloudCardState extends State<CloudCard> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    signedIn ? 'Cloud backup on' : 'Cloud backup off',
+                    signedIn ? 'Google account connected' : 'Cloud backup off',
                     style: theme.textTheme.titleMedium,
                   ),
                 ),
@@ -240,8 +240,9 @@ class _CloudCardState extends State<CloudCard> {
             const SizedBox(height: 6),
             Text(
               signedIn
-                  ? 'Synced to ${c.cloud.email ?? 'your Google account'}. Your decks, '
-                        'profile and history are saved to your Google Drive.'
+                  ? 'Signed in as ${c.cloud.email ?? 'your Google account'}. '
+                        'Use Back up now to verify that your decks, profile and '
+                        'history are saved to Google Drive.'
                   : 'Sign in with Google to save your data to your own Google Drive '
                         'and restore it after a reinstall.',
               style: theme.textTheme.bodySmall,

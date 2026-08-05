@@ -113,10 +113,15 @@ The output is written below `build/app/outputs/flutter-apk/`.
 ### Optional Google Drive backup
 
 Guest mode works without Google configuration. To enable account backup for a
-signed build, create the Android OAuth client for package
-`com.giuseppe.mtg.mtg_tourney` and register the signing certificate's SHA-1 in
-Google Cloud. The requested Drive scope is limited to the app's private
-`appDataFolder`.
+signed build, register an Android OAuth client for package
+`com.giuseppe.mtg.mtg_tourney` and each certificate that signs the app, enable
+the Drive API, and configure the OAuth consent audience. The requested Drive
+scope is limited to the app's private `appDataFolder`.
+
+Follow [Google sign-in and Drive backup setup](docs/GOOGLE_SIGN_IN.md) for the
+current release/debug fingerprints, consent-screen configuration, Play App
+Signing guidance, and troubleshooting. Never commit account passwords or OAuth
+client secrets.
 
 ## Repository layout
 
