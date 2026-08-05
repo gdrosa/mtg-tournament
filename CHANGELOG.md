@@ -4,8 +4,12 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-08-05
+
 ### Added
 
+- Update check at launch and from Profile: offers the newest stable GitHub
+  release and asks before installing it. Pre-releases are never offered.
 - One decklist box when registering a deck: a "Sideboard" line splits the
   paste, otherwise a 75-card list is read as 60 + 15.
 

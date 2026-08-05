@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../host/host_controller.dart';
 import '../services/cloud_sync.dart';
+import '../services/app_update.dart';
 import '../services/export_data.dart';
 import '../shared/models.dart';
 import 'app_scope.dart';
@@ -199,6 +200,15 @@ class _ProfileBody extends StatelessWidget {
             'any app. Session tokens are never included.',
             style: theme.textTheme.bodySmall,
             textAlign: TextAlign.center,
+          ),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => checkForUpdate(context, silent: false),
+          icon: const Icon(Icons.system_update),
+          label: const Text('Check for updates'),
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size.fromHeight(48),
           ),
         ),
       ],

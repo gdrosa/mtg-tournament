@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../services/app_update.dart';
 import '../shared/tournament_engine.dart';
 import 'account_gate_screen.dart';
 import 'app_scope.dart';
@@ -36,6 +37,16 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // Ask once per launch, after the first frame so a dialog has a Navigator.
+    // Silent when there is nothing newer, and offline simply does nothing.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) checkForUpdate(context);
+    });
+  }
 
   static const _tabs = [
     _HomeTab(),
