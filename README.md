@@ -1,9 +1,5 @@
-# MTG Tournament
-
-An organizer-first tournament manager for Magic: The Gathering events. One
-Android phone owns the tournament and players join from any modern browser by
-scanning a QR code. Each event can run fully online through a free Cloudflare
-relay, or locally on the same Wi-Fi with no internet required during play.
+This is an app to play for friend, made for friends. It lets you organize tournaments for Magic: The Gathering events. One phone hosts the tournament and players join from any browser by
+scanning a QR code. Each event can run fully online or locally on the same Wi-Fi with no internet required during play.
 
 <p align="center">
   <img src="docs/images/home.png" alt="MTG Tournament home screen" width="260" />
@@ -11,60 +7,61 @@ relay, or locally on the same Wi-Fi with no internet required during play.
 </p>
 
 > [!WARNING]
-> LAN traffic uses plain HTTP/WebSocket and is intended for a trusted network.
-> Never expose the phone's port `8080` to the public internet. Online mode uses
-> HTTPS/WSS through the included relay instead.
+> LAN mode uses plain HTTP and WebSocket connections. Use it only on trusted
+> networks and never expose port `8080` to the public internet.
+> Online mode uses HTTPS/WSS through the included relay.
 
-## What it does
+## Features
 
-- Lets the organizer choose **Online** or **LAN** for every tournament.
-- Hosts the authoritative tournament state directly on the organizer's Android phone.
-- Lets players join a lightweight browser client by QR code, URL, or event code.
-- Generates Swiss pairings and standings for best-of-three matches.
-- Reconciles independent result submissions from both players.
-- Reveals decklists after an accepted result and escalates reported infractions.
-- Gives the organizer controls for disputes, drops, round advancement, and event closure.
-- Stores player profiles, named decks, tournament history, and aggregate statistics locally.
-- Resolves card names through Scryfall and caches images before offline play.
-- Optionally backs up the app's JSON state to the user's private Google Drive app-data folder.
-- Exports that state as one gzipped JSON file to any app (Files, Gmail, Telegram, WhatsApp) from Profile.
-- Lets the owner set a deck profile picture from the clipboard or the device gallery.
-- Keeps hosting alive through an Android foreground service while the screen is locked.
+* Online and LAN tournaments.
+* Browser-based player client accessible by QR code, URL, or event code.
+* Swiss pairings, standings, and best-of-three matches.
+* Independent result submission by both players.
+* Organizer controls for disputes, drops, rounds, and event closure.
+* Decklist management and card lookup through Scryfall.
+* Local player profiles, tournament history, and statistics.
+* Optional backup to the user's private Google Drive app-data folder.
+* Export of all app data as a gzipped JSON file.
+* Android foreground service to keep the tournament active while the screen is locked.
 
 ## How it works
 
-The Flutter app owns the authoritative tournament state. In LAN mode it starts
-an embedded `shelf` HTTP/WebSocket server on `0.0.0.0:8080`. In Online mode it
-opens an outbound secure WebSocket to a Cloudflare Durable Object that relays
-the same player commands and viewer-specific snapshots. State is persisted as
-JSON on the host device after every mutation.
+The organizer's Android phone owns the tournament state.
 
 ```text
 Organizer Android app
-  ├─ Flutter host UI
-  ├─ tournament engine + JSON persistence
-  ├─ LAN: embedded HTTP/WebSocket server → same-Wi-Fi browsers
-  └─ Online: outbound WSS → Cloudflare relay → internet browsers
+  ├─ Flutter organizer UI
+  ├─ tournament engine and JSON persistence
+  ├─ LAN: local HTTP/WebSocket server
+  └─ Online: secure WebSocket connection to the Cloudflare relay
 ```
 
-See [Architecture](docs/ARCHITECTURE.md) for the module boundaries, data flow,
-trust model, and current limitations. The fuller product specification lives in
-[Requirements](docs/REQUIREMENTS.md).
+In LAN mode, the app starts a server on `0.0.0.0:8080` for devices connected to
+the same Wi-Fi network.
 
-## Development setup
+In Online mode, the app connects to a Cloudflare Durable Object that relays
+player commands and tournament updates. Tournament data remains stored on the
+organizer's device.
 
-### Prerequisites
+For more details, see:
 
-- Flutter `3.44.2` with Dart `3.12.2`
-- Android Studio or the Android SDK command-line tools
-- JDK 17
-- An Android device or emulator for the host UI
-- Node.js 22+ when developing or deploying the optional online relay
+* [Architecture](docs/ARCHITECTURE.md)
+* [Requirements](docs/REQUIREMENTS.md)
 
-Check the local toolchain, fetch packages, and validate the project:
+## Development
+
+### Requirements
+
+* Flutter `3.44.2`
+* Dart `3.12.2`
+* JDK 17
+* Android Studio or Android SDK command-line tools
+* Android device or emulator
+* Node.js 22+ for the optional Cloudflare relay
+
+### Setup
 
 ```shell
-flutter --version
 flutter doctor
 flutter pub get
 dart format --output=none --set-exit-if-changed lib test bin tool
@@ -72,7 +69,20 @@ flutter analyze
 flutter test
 ```
 
-Validate the optional online relay separately:
+Run the Android app:
+
+```shell
+flutter devices
+flutter run -d <device-id>
+```
+
+For LAN events, all devices must be connected to the same Wi-Fi network.
+Networks with client isolation may prevent players from reaching the host.
+
+## Online relay
+
+Online mode requires a Cloudflare deployment and a build configured with its
+public URL.
 
 ```shell
 cd cloudflare
@@ -80,110 +90,118 @@ npm ci
 npm run check
 ```
 
-Run the Android host app:
+See [Online hosting setup](docs/ONLINE_HOSTING.md) for deployment instructions.
 
-```shell
-flutter devices
-flutter run -d <device-id>
-```
+Cloudflare credentials are used only by Wrangler on the developer machine and
+must not be committed to the repository.
 
-For LAN events, the host and players must be on the same Wi-Fi. Some guest,
-corporate, and public networks isolate clients; use a private router or hotspot
-if players cannot reach the displayed URL.
+## Player client
 
-### Optional free online relay
+The browser client has no build step.
 
-Online mode needs a free Cloudflare deployment and a build configured with its
-public URL. Follow [Online hosting setup](docs/ONLINE_HOSTING.md). No Cloudflare
-secret is committed to the app; Wrangler authentication stays on the developer
-machine.
-
-### Player-client development
-
-The player interface has no JavaScript build step. Run the same Dart server used
-by the app and open the printed URL:
+Start the development server:
 
 ```shell
 dart run bin/dev_server.dart 8091
 ```
 
-Edit `assets/web/app.js`, `assets/web/style.css`, or
-`assets/web/index.html`, then refresh the browser.
+Then edit:
 
-### Android builds
+* `assets/web/app.js`
+* `assets/web/style.css`
+* `assets/web/index.html`
 
-For a locally installable debug APK:
+Refresh the browser to see the changes.
+
+## Android builds
+
+Build a debug APK:
 
 ```shell
 flutter build apk --debug
 ```
 
-Production APKs must use a private release keystore. Configure
-`android/key.properties` and keep both that file and the keystore outside Git,
-then run:
+Build a release APK:
 
 ```shell
 flutter build apk --release
 ```
 
-The output is written below `build/app/outputs/flutter-apk/`.
+Release builds require a private keystore configured in
+`android/key.properties`. Never commit the keystore or its credentials.
 
-### Optional Google Drive backup
+Generated APKs are available under:
 
-Guest mode works without Google configuration. To enable account backup for a
-signed build, register an Android OAuth client for package
-`com.giuseppe.mtg.mtg_tourney` and each certificate that signs the app, enable
-the Drive API, and configure the OAuth consent audience. The requested Drive
-scope is limited to the app's private `appDataFolder`.
+```text
+build/app/outputs/flutter-apk/
+```
 
-Follow [Google sign-in and Drive backup setup](docs/GOOGLE_SIGN_IN.md) for the
-current release/debug fingerprints, consent-screen configuration, Play App
-Signing guidance, and troubleshooting. Never commit account passwords or OAuth
-client secrets.
+## Google Drive backup
 
-## Repository layout
+Google Drive backup is optional. Guest mode works without Google configuration.
 
-| Path | Purpose |
-| --- | --- |
-| `lib/shared/` | Models, Swiss pairing, tournament state machine, and statistics |
-| `lib/server/` | REST/WebSocket server, snapshots, and JSON persistence |
-| `lib/host/` | LAN/online lifecycle, relay client, foreground service, and orchestration |
-| `lib/services/` | Scryfall cache and optional Google Drive integration |
-| `lib/ui/` | Flutter organizer screens |
-| `assets/web/` | No-build browser client shared by LAN and Online modes |
-| `cloudflare/` | Free online relay Worker, Durable Object, and relay tests |
-| `bin/` | Standalone development server |
-| `test/` | Unit, persistence, and in-memory HTTP regression tests |
-| `docs/` | Architecture, requirements, and curated screenshots |
+To enable backup, configure an Android OAuth client for:
+
+```text
+com.giuseppe.mtg.mtg_tourney
+```
+
+The app only requests access to its private Drive `appDataFolder`.
+
+See [Google sign-in and Drive backup setup](docs/GOOGLE_SIGN_IN.md) for setup and
+troubleshooting instructions.
+
+## Repository structure
+
+| Path            | Purpose                                            |
+| --------------- | -------------------------------------------------- |
+| `lib/shared/`   | Models, pairings, tournament logic, and statistics |
+| `lib/server/`   | HTTP/WebSocket server and persistence              |
+| `lib/host/`     | LAN and Online hosting lifecycle                   |
+| `lib/services/` | Scryfall and Google Drive integrations             |
+| `lib/ui/`       | Flutter organizer interface                        |
+| `assets/web/`   | Browser player client                              |
+| `cloudflare/`   | Online relay                                       |
+| `bin/`          | Development server                                 |
+| `test/`         | Automated tests                                    |
+| `docs/`         | Documentation and screenshots                      |
 
 ## Data and security
 
-- Tournament data is stored on the organizer's device, not in the online relay.
-- Optional cloud backup writes one JSON blob to the user's private Drive app-data folder.
-- Online traffic uses HTTPS/WSS; LAN mode still assumes a trusted network.
-- Card lookup and host-side caching require internet during deck preparation.
-  LAN events serve those cached images locally; Online player browsers load
-  revealed card images directly from Scryfall and therefore require internet.
-- Local captures, credentials, signing material, build output, and interview
-  artifacts are excluded by `.gitignore`.
+* Tournament data is stored on the organizer's device.
+* The online relay does not permanently store tournament data.
+* Online traffic uses HTTPS/WSS.
+* LAN mode should only be used on trusted networks.
+* Scryfall card lookup requires internet during deck preparation.
+* Cached card images can be served locally during LAN events.
+* Credentials, signing files, build output, and local data are excluded by
+  `.gitignore`.
 
-Security concerns should be reported according to [SECURITY.md](SECURITY.md),
-without including live tokens or private tournament data in a public issue.
+Report security issues according to [SECURITY.md](SECURITY.md). Do not include
+tokens, credentials, or private tournament data in public issues.
 
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing the tournament engine or
-wire protocol. Every change should keep `dart format`, `flutter analyze`, and
-`flutter test` green. Relay or player-client changes must also keep the
-Cloudflare type-check, tests, browser syntax check, and deploy dry run green;
-GitHub Actions enforces both validation jobs.
+network protocol.
+
+Before submitting a change, run:
+
+```shell
+dart format --output=none --set-exit-if-changed lib test bin tool
+flutter analyze
+flutter test
+```
+
+Changes to the relay or browser client must also pass the Cloudflare checks.
 
 ## Credits
 
-- Antonio Rossi
+* Antonio Rossi
 
 ## Disclaimer
 
-Magic: The Gathering is a trademark of Wizards of the Coast. This community
-project is not affiliated with or endorsed by Wizards of the Coast. Card data
-and images are retrieved from Scryfall when the organizer requests them.
+Magic: The Gathering is a trademark of Wizards of the Coast.
+
+This community project is not affiliated with or endorsed by Wizards of the
+Coast. Card data and images are retrieved from Scryfall.
