@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-08-05
+
 ### Added
 
 - Per-tournament Online or LAN hosting choice.
