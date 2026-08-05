@@ -156,6 +156,10 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing the tournament engine or
 wire protocol. Every change should keep `dart format`, `flutter analyze`, and
 `flutter test` green; GitHub Actions runs the same checks.
 
+## Credits
+
+- Antonio Rossi
+
 ## Disclaimer
 
 Magic: The Gathering is a trademark of Wizards of the Coast. This community
