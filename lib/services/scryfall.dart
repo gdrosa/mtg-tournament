@@ -22,6 +22,21 @@ abstract class CardSource {
   /// Name suggestions for the editor's "add card" search box.
   Future<List<String>> autocomplete(String query);
 
+  /// Resolve many exact card names at once, keyed by lower-cased name. Names
+  /// that do not resolve are simply absent; the caller can retry those one by
+  /// one through the fuzzy [resolve].
+  ///
+  /// The default implementation is one [resolve] per name, which keeps test
+  /// fakes working; [ScryfallSource] overrides it with a batched request.
+  Future<Map<String, CardInfo>> resolveAll(List<String> names) async {
+    final out = <String, CardInfo>{};
+    for (final name in names) {
+      final info = await resolve(name);
+      if (info != null) out[name.trim().toLowerCase()] = info;
+    }
+    return out;
+  }
+
   /// Download the image bytes at [url].
   Future<List<int>> fetchImage(String url);
 }
@@ -100,6 +115,80 @@ class ScryfallSource implements CardSource {
     // Keep the card even if no image could be selected (it renders as a text
     // placeholder) — don't drop a valid card just because of its layout.
     return cardInfoFromScryfall(j);
+  }
+
+  /// Scryfall accepts at most 75 identifiers per `/cards/collection` request.
+  static const _collectionBatch = 75;
+
+  @override
+  Future<Map<String, CardInfo>> resolveAll(List<String> names) async {
+    // One request per 75 cards instead of one per card: a 75-card decklist of
+    // ~25 distinct names resolves in a single round trip rather than 25.
+    final unique = <String, String>{}; // lower-cased key -> name as typed
+    for (final raw in names) {
+      final name = raw.trim();
+      if (name.isNotEmpty) unique.putIfAbsent(name.toLowerCase(), () => name);
+    }
+    final out = <String, CardInfo>{};
+    final wanted = unique.values.toList(growable: false);
+    for (var i = 0; i < wanted.length; i += _collectionBatch) {
+      final chunk = wanted.skip(i).take(_collectionBatch);
+      final j = await _postJson('$_api/cards/collection', {
+        'identifiers': [
+          for (final name in chunk) {'name': name},
+        ],
+      });
+      // `not_found` identifiers are simply absent from the result; the caller
+      // retries those through the fuzzy single-card endpoint.
+      final data = j?['data'];
+      if (data is! List) continue;
+      for (final entry in data) {
+        if (entry is! Map) continue;
+        final info = cardInfoFromScryfall(entry);
+        if (info == null) continue;
+        for (final key in _nameKeys(info.name)) {
+          out.putIfAbsent(key, () => info);
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Lookup keys for a card: its full name, plus each face of a split/DFC name
+  /// so a list that says "Fire" still matches "Fire // Ice".
+  static Iterable<String> _nameKeys(String name) sync* {
+    yield name.toLowerCase();
+    for (final face in name.split('//')) {
+      final key = face.trim().toLowerCase();
+      if (key.isNotEmpty) yield key;
+    }
+  }
+
+  Future<Map<String, dynamic>?> _postJson(String url, Object body) =>
+      _throttled(() => _postJsonOnce(url, jsonEncode(body), attempt: 0));
+
+  Future<Map<String, dynamic>?> _postJsonOnce(
+    String url,
+    String body, {
+    required int attempt,
+  }) async {
+    final req = await _http.postUrl(Uri.parse(url));
+    req.headers.set(HttpHeaders.userAgentHeader, 'mtg-tourney/1.0');
+    req.headers.set(HttpHeaders.acceptHeader, 'application/json');
+    req.headers.contentType = ContentType.json;
+    req.write(body);
+    final resp = await req.close();
+    if (resp.statusCode == 200) {
+      final text = await resp.transform(utf8.decoder).join();
+      return jsonDecode(text) as Map<String, dynamic>;
+    }
+    final retryAfter = _retryAfter(resp);
+    await resp.drain<void>();
+    if (_isTransient(resp.statusCode) && attempt < maxRetries) {
+      await Future<void>.delayed(retryAfter ?? _backoff(attempt));
+      return _postJsonOnce(url, body, attempt: attempt + 1);
+    }
+    return null;
   }
 
   @override

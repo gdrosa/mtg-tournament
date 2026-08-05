@@ -944,6 +944,30 @@ class HostController extends ChangeNotifier {
       return info;
     }
 
+    // Ask for every unknown name in one batched request before walking the
+    // lines. Without this each distinct card costs its own rate-limited round
+    // trip, which is what made importing a deck take seconds per card.
+    final known = <String>{
+      for (final ci in server.cardCatalog.values) ci.name.toLowerCase(),
+    };
+    final unknown = <String, String>{};
+    for (final line in [...mainLines, ...sideLines]) {
+      final key = line.name.trim().toLowerCase();
+      if (!known.contains(key)) {
+        unknown.putIfAbsent(key, () => line.name.trim());
+      }
+    }
+    if (unknown.isNotEmpty) {
+      try {
+        final batch = await cardSource.resolveAll(unknown.values.toList());
+        byName.addAll(batch);
+        server.registerCards(batch.values.toSet().toList());
+      } catch (_) {
+        // Offline or a failed batch: every line still falls back to the
+        // single-card path below, which records the failures individually.
+      }
+    }
+
     Future<List<DeckCardEntry>> run(List<ParsedLine> lines) async {
       final out = <DeckCardEntry>[];
       for (final l in lines) {

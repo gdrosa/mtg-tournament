@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- One decklist box when registering a deck: a "Sideboard" line splits the
+  paste, otherwise a 75-card list is read as 60 + 15.
+
+### Changed
+
+- Resolve unknown card names in one batched Scryfall request instead of one
+  per card (a 31-name decklist: 64s to 1.8s).
+
 ### Security
 
 - Restrict relay room creation to builds carrying a provisioning key, with

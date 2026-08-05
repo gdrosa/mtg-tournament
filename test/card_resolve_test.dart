@@ -11,11 +11,24 @@ import 'package:mtg_tourney/shared/cards.dart';
 class _FakeSource implements CardSource {
   final Map<String, CardInfo> byName;
   int imageFetches = 0;
+  int singleResolves = 0;
+  int batchCalls = 0;
   _FakeSource(this.byName);
 
   @override
-  Future<CardInfo?> resolve(String name) async =>
-      byName[name.toLowerCase().trim()];
+  Future<CardInfo?> resolve(String name) async {
+    singleResolves++;
+    return byName[name.toLowerCase().trim()];
+  }
+
+  @override
+  Future<Map<String, CardInfo>> resolveAll(List<String> names) async {
+    batchCalls++;
+    return {
+      for (final n in names)
+        n.toLowerCase().trim(): ?byName[n.toLowerCase().trim()],
+    };
+  }
 
   @override
   Future<List<String>> autocomplete(String q) async => byName.values
@@ -84,6 +97,11 @@ void main() {
       expect(c.imageCache!.isCached('bolt'), isTrue);
       expect(c.imageCache!.isCached('mtn'), isTrue);
       expect(progress.last, 3); // 2 main lines + 1 side line
+      // Unknown names are asked for in batched requests — at most one per
+      // resolve pass (saveDeck also kicks off a background pass), never one
+      // round trip per card, which is what made importing a deck slow.
+      expect(src.batchCalls, lessThanOrEqualTo(2));
+      expect(src.singleResolves, 0);
 
       c.dispose();
       dir.deleteSync(recursive: true);

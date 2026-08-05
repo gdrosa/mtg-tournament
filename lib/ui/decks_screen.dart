@@ -3,6 +3,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:pasteboard/pasteboard.dart';
 
 import '../host/host_controller.dart';
+import '../shared/cards.dart';
 import '../shared/models.dart';
 import '../shared/stats.dart';
 import 'app_scope.dart';
@@ -353,12 +354,11 @@ class _DeckFormScreen extends StatefulWidget {
 class _DeckFormScreenState extends State<_DeckFormScreen> {
   late final nick = TextEditingController(text: widget.suggestedNick);
   final name = TextEditingController();
-  final main = TextEditingController();
-  final side = TextEditingController();
+  final list = TextEditingController();
 
   @override
   void dispose() {
-    for (final c in [nick, name, main, side]) {
+    for (final c in [nick, name, list]) {
       c.dispose();
     }
     super.dispose();
@@ -384,8 +384,20 @@ class _DeckFormScreenState extends State<_DeckFormScreen> {
             _field('Your nickname', nick, hint: 'e.g. Giuseppe'),
           ],
           _field('Deck name', name, hint: 'e.g. Domain Zoo'),
-          _field('Maindeck', main, lines: 5, hint: '4 Lightning Bolt\n...'),
-          _field('Sideboard', side, lines: 3),
+          _field(
+            'Decklist',
+            list,
+            lines: 10,
+            hint: '4 Lightning Bolt (2XM) 125\n...\n\nSideboard\n2 Abrade',
+          ),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(
+              'Paste the whole list. A "Sideboard" line splits it; otherwise a '
+              '75-card list is read as 60 + 15.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
           const SizedBox(height: 16),
           FilledButton(onPressed: _save, child: const Text('Save deck')),
         ],
@@ -404,13 +416,14 @@ class _DeckFormScreenState extends State<_DeckFormScreen> {
       _toast('Enter a nickname');
       return;
     }
+    final split = splitDecklistText(list.text);
     c.registerDeck(
       nickname: nickname.isEmpty
           ? (c.server.owner?.nickname ?? 'Player')
           : nickname,
       name: name.text.trim(),
-      main: main.text,
-      side: side.text,
+      main: split.main,
+      side: split.side,
     );
     Navigator.of(context).pop();
   }

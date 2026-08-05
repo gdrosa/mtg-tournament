@@ -172,6 +172,67 @@ List<ParsedLine> parseDecklist(String text) {
   return out;
 }
 
+/// A "Sideboard" section header: "Sideboard", "// SIDEBOARD", "#side", "SB:".
+final _sideHeader = RegExp(
+  r'^[/#\s]*(sideboard|side|sb)\b\s*:?\s*$',
+  caseSensitive: false,
+);
+
+/// Split one pasted decklist into maindeck and sideboard text.
+///
+/// A sideboard header wins when the paste has one. Otherwise the modern 60+15
+/// shape decides: exactly 75 cards means the last 15 are the sideboard.
+/// Anything else stays in the maindeck — better one wrong-sized board the user
+/// can see than a guess that silently moves cards.
+///
+/// Lines are carried over verbatim, so printing tags like "(TSR) 263" and the
+/// user's own ordering survive the import.
+({String main, String side}) splitDecklistText(String text) {
+  final lines = text.split('\n');
+
+  final header = lines.indexWhere(
+    (l) => _qtyName.firstMatch(l.trim()) == null && _sideHeader.hasMatch(l),
+  );
+  if (header >= 0) {
+    return (
+      main: lines.take(header).join('\n').trim(),
+      side: lines.skip(header + 1).join('\n').trim(),
+    );
+  }
+
+  // Index every card line with its quantity, then walk back 15 cards.
+  final cards = <({int index, int qty, String name})>[];
+  var total = 0;
+  for (var i = 0; i < lines.length; i++) {
+    final m = _qtyName.firstMatch(lines[i].trim());
+    final qty = m == null ? null : int.tryParse(m.group(1)!);
+    if (m == null || qty == null || qty <= 0) continue;
+    cards.add((index: i, qty: qty, name: m.group(2)!.trim()));
+    total += qty;
+  }
+  if (total != 75) return (main: text.trim(), side: '');
+
+  var needed = 15;
+  var cut = cards.length;
+  while (needed > 0 && cut > 0) {
+    final card = cards[cut - 1];
+    if (card.qty > needed) {
+      // A stack straddling the boundary is the one case worth rewriting: keep
+      // the remainder in the maindeck and move the rest across.
+      final kept = card.qty - needed;
+      final main = [...lines.take(card.index), '$kept ${card.name}'];
+      return (main: main.join('\n').trim(), side: '$needed ${card.name}');
+    }
+    needed -= card.qty;
+    cut--;
+  }
+  final boundary = cards[cut].index;
+  return (
+    main: lines.take(boundary).join('\n').trim(),
+    side: lines.skip(boundary).join('\n').trim(),
+  );
+}
+
 /// Render structured entries back to a canonical "N Name" decklist text, using
 /// [nameOf] to look a card name up from its id. Unknown ids are skipped.
 String renderDecklist(
