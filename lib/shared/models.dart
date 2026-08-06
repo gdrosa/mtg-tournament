@@ -146,23 +146,32 @@ class Entry {
   final String deckId;
   String? deckRevisionId;
   bool dropped;
+
+  /// The organizer disqualified this player. Implies [dropped], but is kept
+  /// separately because history must not read a disqualification as "they went
+  /// home early".
+  bool disqualified;
+
   Entry({
     required this.playerId,
     required this.deckId,
     this.deckRevisionId,
     this.dropped = false,
+    this.disqualified = false,
   });
   Map<String, dynamic> toJson() => {
     'playerId': playerId,
     'deckId': deckId,
     if (deckRevisionId != null) 'revisionId': deckRevisionId,
     'dropped': dropped,
+    if (disqualified) 'disqualified': true,
   };
   factory Entry.fromJson(Map j) => Entry(
     playerId: j['playerId'] as String,
     deckId: j['deckId'] as String,
     deckRevisionId: j['revisionId'] as String?,
     dropped: j['dropped'] as bool? ?? false,
+    disqualified: j['disqualified'] == true,
   );
 }
 
@@ -175,7 +184,12 @@ class GameScore {
 
   bool get p1IsWinner => p1Wins > p2Wins;
   bool get p2IsWinner => p2Wins > p1Wins;
-  bool get isDraw => p1Wins == p2Wins;
+
+  /// 0-0 with no draws: nobody won and nobody drew. The only way to reach it is
+  /// the organizer disqualifying both players, so it is a double loss rather
+  /// than a 0-0 draw — see [isDraw].
+  bool get isDoubleLoss => p1Wins == 0 && p2Wins == 0 && draws == 0;
+  bool get isDraw => p1Wins == p2Wins && !isDoubleLoss;
   int get totalGames => p1Wins + p2Wins + draws;
 
   /// Flip orientation (used when a result is reported from p2's point of view).

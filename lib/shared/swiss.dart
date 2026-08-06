@@ -87,6 +87,15 @@ List<StandingRow> computeStandings(
     final p1 = of(r.p1);
     final p2 = of(r.p2!);
     final s = r.score;
+    if (s.isDoubleLoss) {
+      // Both disqualified: a played round, no points, no games. Counting it as
+      // a 0-0 draw would hand each of them a match point.
+      p1.rounds += 1;
+      p2.rounds += 1;
+      p1.opponents.add(r.p2!);
+      p2.opponents.add(r.p1);
+      continue;
+    }
     // match points
     if (s.p1IsWinner) {
       p1.matchPoints += kWinPoints;

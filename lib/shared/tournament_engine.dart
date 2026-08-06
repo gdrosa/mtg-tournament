@@ -149,8 +149,11 @@ class TournamentEngine {
 
   /// Reject scores that aren't a legal best-of-3 line, so a hostile/buggy client
   /// can't poison the GW%/OGW% tiebreakers (e.g. a negative or 9-0 submission).
-  static void _validateScore(GameScore s) {
+  ///
+  /// [allowDoubleLoss] opens up 0-0, which only [disqualify] may produce.
+  static void _validateScore(GameScore s, {bool allowDoubleLoss = false}) {
     final total = s.p1Wins + s.p2Wins + s.draws;
+    if (allowDoubleLoss && s.isDoubleLoss) return;
     if (s.p1Wins < 0 ||
         s.p2Wins < 0 ||
         s.draws < 0 ||
@@ -256,6 +259,41 @@ class TournamentEngine {
     m.reviewReason = ReviewReason.none;
   }
 
+  /// Disqualify one or both players in [matchId] — the third way out of a
+  /// decklist review, alongside amending the result and letting it stand.
+  ///
+  /// A disqualified player is out of the event: dropped, flagged in their
+  /// entry so history never mistakes it for going home early, and given the
+  /// loss. Disqualifying both is a double loss (0-0), not a draw.
+  void disqualify(String matchId, List<String> playerIds, {String? note}) {
+    final m = _match(matchId);
+    if (m.isBye) throw EngineError('There is nobody to disqualify in a bye.');
+    if (playerIds.isEmpty) throw EngineError('Nobody was selected.');
+    for (final pid in playerIds) {
+      if (!m.involves(pid)) throw EngineError('$pid is not in match $matchId.');
+    }
+    final out = playerIds.toSet();
+    for (final pid in out) {
+      final e = entryOf(pid);
+      if (e == null) throw EngineError('No such entry: $pid');
+      e.disqualified = true;
+      e.dropped = true;
+    }
+    final bothOut = out.contains(m.p1Id) && out.contains(m.p2Id);
+    final result = bothOut
+        ? const GameScore(0, 0)
+        : (out.contains(m.p1Id)
+              ? const GameScore(0, 2)
+              : const GameScore(2, 0));
+    _validateScore(result, allowDoubleLoss: true);
+    m.accepted = result;
+    m.hostNote = note;
+    m.adjudicated = true;
+    m.disputed = true;
+    m.state = MatchState.confirmed;
+    m.reviewReason = ReviewReason.none;
+  }
+
   // ---- Drops & rounds ----------------------------------------------------
 
   /// Drop a player. A drop mid-round awards their current opponent the match
@@ -335,6 +373,7 @@ class TournamentEngine {
         continue;
       }
       final s = m.accepted!;
+      if (s.isDoubleLoss) continue; // both disqualified: nobody advances
       if (s.isDraw) {
         // Nothing in a knockout can break this tie, so it is the organizer's
         // call — and refusing is far better than picking a player silently.

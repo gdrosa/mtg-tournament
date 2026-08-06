@@ -69,6 +69,7 @@ class PlayerLifetime {
 Outcome outcomeFor(String playerId, MatchRecord record) {
   if (record.isBye) return Outcome.win; // a bye is a free match win
   final s = record.score;
+  if (s.isDoubleLoss) return Outcome.loss; // both disqualified
   if (s.isDraw) return Outcome.draw;
   final isP1 = record.p1 == playerId;
   final p1Won = s.p1IsWinner;

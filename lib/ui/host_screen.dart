@@ -734,7 +734,8 @@ class _HostScreenState extends State<HostScreen> {
                   child: Text(
                     review.length == 1
                         ? 'A match needs your attention'
-                        : '${review.length} matches need your attention',
+                        : '${review.length} matches need your attention '
+                              '(oldest first)',
                     style: theme.textTheme.titleMedium?.copyWith(
                       color: onColor,
                       fontWeight: FontWeight.w700,
@@ -747,7 +748,7 @@ class _HostScreenState extends State<HostScreen> {
               const Divider(height: 20),
               Text(
                 p['isInfraction'] == true
-                    ? '👎 Infraction reported'
+                    ? '⚠ Decklist not confirmed'
                           '${(p['reportedBy'] as List?)?.isNotEmpty == true ? ' by ${(p['reportedBy'] as List).join(', ')}' : ''}'
                     : '⚠ Players reported different results',
                 style: TextStyle(color: onColor, fontWeight: FontWeight.w600),
@@ -812,7 +813,88 @@ class _HostScreenState extends State<HostScreen> {
         child: const Text('Other…'),
       ),
     );
+    if (p['p2'] != null) {
+      widgets.add(
+        OutlinedButton(
+          onPressed: () => _disqualify(p),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Theme.of(context).colorScheme.error,
+          ),
+          child: const Text('Disqualify…'),
+        ),
+      );
+    }
     return widgets;
+  }
+
+  /// The third way out of a review: remove a player from the event. They are
+  /// dropped and take the loss; disqualifying both is a double loss.
+  Future<void> _disqualify(Map p) async {
+    final matchId = '${p['matchId']}';
+    final p1 = '${p['p1']}', p2 = '${p['p2']}';
+    final p1Id = p['p1Id'] as String?, p2Id = p['p2Id'] as String?;
+    if (p1Id == null || p2Id == null) return;
+    final choices = <(String, List<String>)>[
+      ('$p1 only — $p2 wins 2–0', [p1Id]),
+      ('$p2 only — $p1 wins 2–0', [p2Id]),
+      ('Both — nobody scores', [p1Id, p2Id]),
+    ];
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              title: Text('Disqualify'),
+              subtitle: Text(
+                'They are out of the event and take the loss. Their results so '
+                'far are kept and marked as a disqualification.',
+              ),
+            ),
+            const Divider(height: 1),
+            for (final (label, ids) in choices)
+              ListTile(
+                title: Text(label),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _confirmDisqualify(matchId, label, ids);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmDisqualify(
+    String matchId,
+    String label,
+    List<String> playerIds,
+  ) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Disqualify?'),
+        content: Text('$label\n\nThis cannot be undone from here.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Disqualify'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await _guard(() async => c.disqualify(matchId, playerIds));
+    }
   }
 
   // Host override: pick any best-of-3 outcome (penalties, or a score neither
@@ -968,42 +1050,27 @@ class _HostScreenState extends State<HostScreen> {
       if (m['revealed'] == true) {
         final d = m['opponentDeck'] as Map?;
         children.add(const SizedBox(height: 8));
-        children.add(
-          Text(
-            'Result ${m['accepted']} · ${m['opponent']}\'s deck: ${d?['name'] ?? ''}',
-          ),
-        );
-        final oppDeckId = d?['deckId'] as String?;
-        if (oppDeckId != null) {
-          children.add(const SizedBox(height: 6));
+        children.add(Text('Result ${m['accepted']}'));
+        // The decklist is what this step is about, so it is shown, not hidden
+        // behind a button. The card view stays one tap away for the images.
+        children.add(const SizedBox(height: 8));
+        children.add(_opponentDecklist(m, d));
+        if (m['needsInfraction'] == true) {
+          children.add(const SizedBox(height: 10));
           children.add(
-            Align(
-              alignment: Alignment.centerLeft,
-              child: OutlinedButton.icon(
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => DeckEditorScreen(
-                      deckId: oppDeckId,
-                      readOnly: true,
-                      titleOverride: "${m['opponent']}'s deck",
-                    ),
-                  ),
-                ),
-                icon: const Icon(Icons.style),
-                label: const Text('View their cards'),
-              ),
+            Text(
+              'Does this match the deck you played against?',
+              style: theme.textTheme.bodySmall,
             ),
           );
-        }
-        if (m['needsInfraction'] == true) {
-          children.add(const SizedBox(height: 8));
+          children.add(const SizedBox(height: 6));
           children.add(
             Row(
               children: [
                 Expanded(
                   child: FilledButton(
                     onPressed: () => _guard(() async => c.infraction(id, true)),
-                    child: const Text('👍 All good'),
+                    child: const Text('✓ Decklist is correct'),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -1011,7 +1078,7 @@ class _HostScreenState extends State<HostScreen> {
                   child: OutlinedButton(
                     onPressed: () =>
                         _guard(() async => c.infraction(id, false)),
-                    child: const Text('👎 Report'),
+                    child: const Text('⚠ Something is wrong'),
                   ),
                 ),
               ],
@@ -1043,6 +1110,81 @@ class _HostScreenState extends State<HostScreen> {
     );
   }
 
+  /// The opponent's registered list, open on the screen. Tapping the header
+  /// opens the full card view — for the images, not to see the list at all.
+  Widget _opponentDecklist(Map m, Map? deck) {
+    final theme = Theme.of(context);
+    if (deck == null) {
+      return Text(
+        'No decklist was registered.',
+        style: theme.textTheme.bodySmall,
+      );
+    }
+    final main = (deck['mainboard'] as String? ?? '').trim();
+    final side = (deck['sideboard'] as String? ?? '').trim();
+    final deckId = deck['deckId'] as String?;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${m['opponent']} — ${deck['name'] ?? ''}',
+                  style: theme.textTheme.titleSmall,
+                ),
+              ),
+              if (deckId != null)
+                IconButton(
+                  tooltip: 'Card images',
+                  icon: const Icon(Icons.style, size: 20),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => DeckEditorScreen(
+                        deckId: deckId,
+                        readOnly: true,
+                        titleOverride: "${m['opponent']}'s deck",
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          if (main.isEmpty && side.isEmpty)
+            Text('(no list provided)', style: theme.textTheme.bodySmall)
+          else ...[
+            if (main.isNotEmpty) ...[
+              Text(
+                'Maindeck',
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              Text(main, style: theme.textTheme.bodySmall),
+            ],
+            if (side.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Sideboard',
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              Text(side, style: theme.textTheme.bodySmall),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _scoreChip(String id, int mine, int opp, String label) =>
       OutlinedButton(
         onPressed: () => _guard(() async => c.submit(id, mine, opp)),
@@ -1059,11 +1201,16 @@ class _HostScreenState extends State<HostScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Standings', style: theme.textTheme.titleMedium),
+            Text(
+              'Ties break on OMW%, then GW%, then OGW%.',
+              style: theme.textTheme.bodySmall,
+            ),
             const SizedBox(height: 4),
             for (final r in standings)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 5),
                 child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     SizedBox(
                       width: 24,
@@ -1079,9 +1226,17 @@ class _HostScreenState extends State<HostScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('${r['nickname']}'),
+                          Text(
+                            '${r['nickname']}'
+                            '${r['disqualified'] == true ? ' · DQ' : ''}',
+                          ),
                           Text(
                             '${r['deckName']} · ${r['record']}',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          Text(
+                            'OMW ${r['omw']}% · GW ${r['gw']}% · '
+                            'OGW ${r['ogw']}%',
                             style: theme.textTheme.bodySmall,
                           ),
                         ],

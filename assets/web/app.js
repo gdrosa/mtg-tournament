@@ -534,23 +534,26 @@ function matchCard() {
   }
 
   if (m.revealed) {
+    // The decklist is the point of this step, so it is here, open, with no tap
+    // in the way.
     body += `<div class="spacer"></div><span class="pill ok">Result ${esc(m.accepted)}</span>
-      <h3>${esc(m.opponent)}'s deck</h3>
+      <h3>${esc(m.opponent)}'s decklist</h3>
       ${deckCardsHtml(m.opponentDeck)}`;
     if (m.needsInfraction) {
-      body += `<p class="muted">Any infractions in this match (illegal deck, rules issue)?</p>
+      body += `<p class="muted">Check the list above against the deck you actually played against.
+        Confirm it, or flag it and the organizer will step in.</p>
         <div class="row">
           <button class="good" data-action="infraction" data-match-id="${esc(m.matchId)}"
-            data-ok="true">&#128077; All good</button>
+            data-ok="true">&#10003; Decklist is correct</button>
           <button class="bad" data-action="infraction" data-match-id="${esc(m.matchId)}"
-            data-ok="false">&#128078; Report</button>
+            data-ok="false">&#9888; Something is wrong</button>
         </div>`;
     } else if (m.state === 'needsReview' && m.reviewReason === 'infractionReported') {
-      body += `<span class="pill review">Infraction reported</span><p class="muted">The organizer is reviewing.</p>`;
+      body += `<span class="pill review">Sent to the organizer</span><p class="muted">They are reviewing this decklist.</p>`;
     } else if (m.confirmed) {
       body += `<span class="pill ok">Match confirmed &#10003;</span><p class="muted">Waiting for the round to finish.</p>`;
     } else if (m.yourInfraction != null) {
-      body += `<p class="muted">You confirmed. Waiting for your opponent.</p>`;
+      body += `<p class="muted">You confirmed the decklist. Waiting for your opponent.</p>`;
     }
   }
   return `<div class="card">${body}</div>` + surveyCard(m.survey);
@@ -651,12 +654,16 @@ function deckCardsHtml(d) {
 function standingsCard() {
   const s = snap.standings || [];
   if (!s.length) return '';
+  // The full MTR tiebreaker chain, in the order it decides ties: match points,
+  // then OMW%, GW%, OGW%.
   const rows = s.map((r) => `<div class="list-row">
       <div class="rank">${r.rank}</div>
-      <div class="grow"><div>${esc(r.nickname)}</div><div class="sub">${esc(r.deckName)} &middot; ${esc(r.record)}</div></div>
-      <div class="mono"><b>${r.matchPoints}</b> pts<div class="sub">OMW ${r.omw}%</div></div>
+      <div class="grow"><div>${esc(r.nickname)}${r.disqualified ? ' <span class="pill review">DQ</span>' : ''}</div>
+        <div class="sub">${esc(r.deckName)} &middot; ${esc(r.record)}</div></div>
+      <div class="mono"><b>${r.matchPoints}</b> pts<div class="sub">OMW ${r.omw}% &middot; GW ${r.gw}%<br>OGW ${r.ogw}%</div></div>
     </div>`).join('');
-  return `<div class="card"><h3 style="margin-top:0">Standings</h3>${rows}</div>`;
+  return `<div class="card"><h3 style="margin-top:0">Standings</h3>${rows}
+    <p class="muted">Ties break on opponents' match-win %, then your game-win %, then opponents' game-win %.</p></div>`;
 }
 
 function playersCard() {

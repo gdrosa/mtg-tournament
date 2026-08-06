@@ -114,9 +114,11 @@ class MatchFact {
   bool usedArchetype(String archetype) =>
       p1.archetypeLabel == archetype || p2?.archetypeLabel == archetype;
 
-  /// Outcome from [playerId]'s point of view. A bye is a match win.
+  /// Outcome from [playerId]'s point of view. A bye is a match win; a double
+  /// disqualification is a loss for both.
   Outcome outcomeFor(String playerId) {
     if (isBye) return Outcome.win;
+    if (score.isDoubleLoss) return Outcome.loss;
     if (score.isDraw) return Outcome.draw;
     final isP1 = p1.playerId == playerId;
     return (isP1 == score.p1IsWinner) ? Outcome.win : Outcome.loss;

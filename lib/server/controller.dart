@@ -553,6 +553,12 @@ class ServerController {
     _changed();
   }
 
+  /// Disqualify one or both players in a match under review.
+  void disqualify(String matchId, List<String> playerIds, {String? note}) {
+    _requireEngine().disqualify(matchId, playerIds, note: note);
+    _changed();
+  }
+
   // ========================================================================
   // Player commands (during a round)
   // ========================================================================
@@ -1126,6 +1132,7 @@ class ServerController {
         'nickname': players[x.playerId]?.nickname ?? '?',
         'deckName': decks[x.deckId]?.name ?? '?',
         'dropped': x.dropped,
+        'disqualified': x.disqualified,
         'record': _recordString(e, x.playerId),
       },
   ];
@@ -1143,9 +1150,14 @@ class ServerController {
           'nickname': players[standings[i].playerId]?.nickname ?? '?',
           'deckName': _deckNameFor(e, standings[i].playerId),
           'matchPoints': standings[i].matchPoints,
+          // The full MTR Appendix C tiebreaker chain, in the order it is
+          // applied, so every screen can show why one player is above another.
           'omw': (standings[i].omw * 100).toStringAsFixed(1),
           'gw': (standings[i].gw * 100).toStringAsFixed(1),
+          'ogw': (standings[i].ogw * 100).toStringAsFixed(1),
           'record': _recordString(e, standings[i].playerId),
+          'disqualified':
+              e.entryOf(standings[i].playerId)?.disqualified ?? false,
         },
     ];
   }
@@ -1164,10 +1176,10 @@ class ServerController {
         final isP1 = m.p1Id == playerId;
         final myWins = isP1 ? s.p1Wins : s.p2Wins;
         final oppWins = isP1 ? s.p2Wins : s.p1Wins;
-        if (myWins > oppWins) {
-          w++;
-        } else if (myWins < oppWins) {
+        if (s.isDoubleLoss || myWins < oppWins) {
           l++;
+        } else if (myWins > oppWins) {
+          w++;
         } else {
           d++;
         }

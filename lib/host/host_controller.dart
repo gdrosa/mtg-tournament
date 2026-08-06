@@ -1159,6 +1159,8 @@ class HostController extends ChangeNotifier {
   void resolve(String matchId, int p1Wins, int p2Wins) =>
       server.hostResolve(matchId, p1Wins, p2Wins);
   void drop(String playerId) => server.dropPlayer(playerId);
+  void disqualify(String matchId, List<String> playerIds) =>
+      server.disqualify(matchId, playerIds);
 
   void setRounds(int rounds) => server.setPlannedRounds(rounds);
   void setRoundMinutes(int minutes) => server.setRoundMinutes(minutes);

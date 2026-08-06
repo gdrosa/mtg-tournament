@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Standings show the whole MTR tiebreaker chain — OMW%, GW% and OGW% — on the
+  organizer screen, in the player's browser and in tournament history, with a
+  line saying which order they apply in. The engine already sorted by all
+  three; only the display stopped at OMW.
+- Disqualification. A decklist review now has three ways out: change the
+  result, let it stand, or disqualify one or both players. A disqualified
+  player is dropped, flagged in history so it is never mistaken for going home
+  early, and takes the loss; disqualifying both is a double loss that scores
+  nothing for either, not a 0-0 draw.
+
+### Changed
+
+- The post-match step is explicitly about the decklist. The opponent's list
+  opens on screen with no "view decklist" tap in the way, and each player
+  confirms it or flags it. A flagged list queues for the organizer, and every
+  flagged match waits — they are handled one at a time, not overwritten.
+
 ## [0.0.4] - 2026-08-06
 
 ### Added

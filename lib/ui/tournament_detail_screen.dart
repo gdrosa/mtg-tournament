@@ -139,9 +139,17 @@ class TournamentDetailScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('${r['nickname']}'),
                 Text(
-                  '${r['deckName']} · ${r['record']} · GW ${r['gw']}%',
+                  '${r['nickname']}'
+                  '${r['disqualified'] == true ? ' · disqualified' : ''}',
+                ),
+                Text(
+                  '${r['deckName']} · ${r['record']}',
+                  style: theme.textTheme.bodySmall,
+                ),
+                // The MTR tiebreaker chain in the order it is applied.
+                Text(
+                  'OMW ${r['omw']}% · GW ${r['gw']}% · OGW ${r['ogw']}%',
                   style: theme.textTheme.bodySmall,
                 ),
               ],

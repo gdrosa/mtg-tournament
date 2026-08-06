@@ -133,14 +133,29 @@ The state machine uses `lobby`, `running`, and `finished` phases.
 - Players establish a token-backed session, save a deck, and enter the lobby.
 - Starting the tournament locks entered decks and creates round one.
 - Players submit scores independently in canonical match orientation.
-- Matching scores reveal decklists and begin the post-match infraction check.
-- A mismatch or reported infraction moves the match to host review.
-- Every match must be confirmed before the host can advance the round.
+- Matching scores reveal both decklists. The list is shown, not hidden behind a
+  tap: checking it is the point of the step.
+- Each player confirms the opponent's decklist or flags it.
+- A score mismatch or a flagged decklist moves the match to host review. Every
+  such match waits its turn; resolving one never clears another.
+- The organizer resolves a review by amending the result, letting it stand, or
+  disqualifying one or both players.
+- A confirmed match opens its optional questionnaire.
+- Every match must be confirmed before the host can advance the round. The
+  advance stays a deliberate press: doing it automatically would close the
+  questionnaire windows the instant the last match landed.
 - Ending an event archives a started tournament, closes its selected transport,
   and preserves durable profiles and decks.
 
 The pairing engine is deterministic when supplied a seeded `Random`, which
 keeps it straightforward to regression-test.
+
+Standings sort by match points, then opponents' match-win %, then game-win %,
+then opponents' game-win % (MTR Appendix C), and every screen shows all four so
+a player can see why they are where they are. A disqualification is recorded on
+the entry rather than inferred from a drop, and a double disqualification is
+stored as a 0-0 `GameScore` — the one score `isDraw` deliberately excludes, so
+it awards no match point to either player.
 
 ### Structure, rounds, and the clock
 
