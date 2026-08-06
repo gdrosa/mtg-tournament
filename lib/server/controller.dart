@@ -11,13 +11,28 @@ import 'dart:math';
 import 'package:uuid/uuid.dart';
 
 import '../shared/cards.dart';
+import '../shared/deck_revision.dart';
 import '../shared/hosting.dart';
 import '../shared/models.dart';
+import '../shared/questionnaire.dart';
 import '../shared/stats.dart';
+import '../shared/stats_facts.dart';
+import '../shared/stats_service.dart';
 import '../shared/tournament_engine.dart';
 import 'persistence.dart';
 
 const _uuid = Uuid();
+
+/// Version of the local save format.
+///
+/// 1 — implicit, any save without this marker: no deck revisions, no
+///     questionnaires, no aliases. Loading one back-fills revisions.
+/// 2 — deck revisions, questionnaires, nickname aliases, tournament
+///     format/series.
+///
+/// Reading is always backward-compatible; the marker exists so an import can
+/// refuse a file from a *newer* app rather than silently dropping fields.
+const int kSaveSchemaVersion = 2;
 
 /// Semantic limits keep one browser from making every viewer snapshot too
 /// large to deliver. They apply to LAN and Online so both transports behave
@@ -44,6 +59,21 @@ class ServerController {
   final Map<String, Deck> decks = {}; // deckId -> Deck
   final Map<String, CardInfo> cardCatalog = {}; // scryfall id -> card metadata
   final Map<String, String> _tokenToPlayer = {}; // sessionToken -> playerId
+
+  /// Immutable decklists as played, keyed by revision id. Never mutated and
+  /// never dropped while any tournament entry references one — this is what
+  /// stops editing a deck from rewriting last season's results.
+  final Map<String, DeckRevision> deckRevisions = {};
+
+  /// Nicknames a player has used before, newest last. Used **only** to suggest
+  /// candidate matches when importing someone else's data; two players sharing
+  /// a nickname are never merged on that basis.
+  final Map<String, List<String>> playerAliases = {};
+
+  /// Optional post-match questionnaires, keyed by [surveyKey]. Raw answers are
+  /// private: they never enter a player-facing snapshot beyond the answering
+  /// player's own copy, and never enter a shared export.
+  final Map<String, MatchSurvey> surveys = {};
 
   // ---- durable device-owner identity (this phone's player) ----
   // Distinct from [hostPlayerId] (the host of the *active* event): the owner is
@@ -72,7 +102,13 @@ class ServerController {
   void Function(String deckId)? onDeckSaved;
   Persistence? store; // durable crash-resume storage (optional)
 
-  ServerController({Random? rng}) : _rng = rng ?? Random();
+  /// Injected clock so questionnaire windows and revision timestamps are
+  /// deterministic under test.
+  final DateTime Function() clock;
+
+  ServerController({Random? rng, DateTime Function()? clock})
+    : _rng = rng ?? Random(),
+      clock = clock ?? DateTime.now;
 
   // ========================================================================
   // Identity / decks (durable)
@@ -94,6 +130,14 @@ class ServerController {
     if (token != null && _tokenToPlayer.containsKey(token)) {
       final pid = _tokenToPlayer[token]!;
       // allow a returning player to update their display nickname
+      final previous = players[pid]?.nickname;
+      if (previous != null && previous != normalizedNickname) {
+        // Keep the old name so history stays searchable under it and imports
+        // can *suggest* (never assume) that this is the same person.
+        final list = playerAliases.putIfAbsent(pid, () => []);
+        list.remove(previous);
+        list.add(previous);
+      }
       players[pid] = Player(id: pid, nickname: normalizedNickname);
       return (token: token, playerId: pid);
     }
@@ -138,6 +182,7 @@ class ServerController {
     required String name,
     required String mainboard,
     required String sideboard,
+    String? archetype,
   }) {
     final normalizedName = name.trim();
     if (normalizedName.isEmpty) throw EngineError('Deck name required.');
@@ -161,6 +206,9 @@ class ServerController {
       id: id,
       ownerId: ownerId,
       name: normalizedName,
+      // Null means "leave it alone" — the browser client never sends one and
+      // must not blank the archetype the organizer set on the phone.
+      archetype: (archetype ?? decks[id]?.archetype ?? '').trim(),
       mainboardText: mainboard,
       sideboardText: sideboard,
     );
@@ -191,6 +239,145 @@ class ServerController {
     _changed();
     return true;
   }
+
+  // ---- immutable deck revisions -----------------------------------------
+
+  /// Freeze [deck] as it stands, reusing an identical existing revision.
+  ///
+  /// Revision ids are content-addressed, so re-entering an unchanged deck does
+  /// not pile up duplicates, and two devices that hold the same list agree on
+  /// the same id (which is what makes importing a shared tournament idempotent).
+  DeckRevision _ensureRevision(
+    Deck deck, {
+    required DateTime at,
+    bool migrated = false,
+  }) {
+    final ordinal =
+        deckRevisions.values.where((r) => r.deckId == deck.id).length + 1;
+    final candidate = DeckRevision.of(
+      deck,
+      revision: ordinal,
+      at: at,
+      migrated: migrated,
+    );
+    final existing = deckRevisions[candidate.id];
+    if (existing != null) return existing;
+    deckRevisions[candidate.id] = candidate;
+    return candidate;
+  }
+
+  /// The revision an entry played, or null when the deck predates revisions and
+  /// could not be reconstructed (its deck was deleted).
+  DeckRevision? revisionOf(Entry entry) =>
+      entry.deckRevisionId == null ? null : deckRevisions[entry.deckRevisionId];
+
+  /// Every revision of [deckId], oldest first.
+  List<DeckRevision> revisionsOf(String deckId) => [
+    for (final r in deckRevisions.values)
+      if (r.deckId == deckId) r,
+  ]..sort((a, b) => a.revision.compareTo(b.revision));
+
+  /// Back-fill revisions for saves written before they existed, and for any
+  /// entry whose revision went missing. The deck's *current* list is the best
+  /// available evidence, so the synthesized revision is flagged [migrated] and
+  /// every screen that shows it says so.
+  int migrateMissingRevisions() {
+    var filled = 0;
+    for (final e in [?engine, ...archive]) {
+      for (final entry in e.entries) {
+        if (entry.deckRevisionId != null &&
+            deckRevisions.containsKey(entry.deckRevisionId)) {
+          continue;
+        }
+        final deck = decks[entry.deckId];
+        if (deck == null) continue; // deck deleted: leave it honestly unknown
+        entry.deckRevisionId = _ensureRevision(
+          deck,
+          at: e.createdAt,
+          migrated: true,
+        ).id;
+        filled++;
+      }
+    }
+    return filled;
+  }
+
+  // ---- post-match questionnaire ------------------------------------------
+
+  /// Open questionnaires for any match in the current round that has just been
+  /// confirmed. Idempotent, and never touches the match itself.
+  void _openSurveysForConfirmedMatches() {
+    final e = engine;
+    if (e == null || e.rounds.isEmpty) return;
+    final now = clock();
+    for (final m in e.currentRound.matches) {
+      if (m.isBye || m.state != MatchState.confirmed) continue;
+      final key = surveyKey(e.id, m.id);
+      if (surveys.containsKey(key)) continue;
+      final s = MatchSurvey.open(tournamentId: e.id, match: m, now: now);
+      if (s != null) surveys[key] = s;
+    }
+  }
+
+  void _closeSurveysBeforeRound() {
+    final e = engine;
+    if (e == null || e.rounds.isEmpty) return;
+    for (final m in e.currentRound.matches) {
+      surveys[surveyKey(e.id, m.id)]?.closed = true;
+    }
+  }
+
+  /// The open questionnaire for [playerId]'s current match, if any.
+  MatchSurvey? surveyFor(String playerId) {
+    final e = engine;
+    if (e == null || e.rounds.isEmpty) return null;
+    final m = e.currentRound.matchFor(playerId);
+    if (m == null) return null;
+    return surveys[surveyKey(e.id, m.id)];
+  }
+
+  /// Record a player's questionnaire answers. Throws [EngineError] when there
+  /// is nothing to answer; the result of the match is never affected.
+  void submitSurvey({
+    required String playerId,
+    required String matchId,
+    required List<GameOutcome> games,
+    required List<MulliganCount> mulligans,
+    TriState onThePlayGame1 = TriState.unknown,
+    TriState sideboarded = TriState.unknown,
+  }) {
+    final e = _requireEngine();
+    final survey = surveys[surveyKey(e.id, matchId)];
+    if (survey == null) {
+      throw EngineError('No questionnaire for that match.');
+    }
+    try {
+      survey.submit(
+        SurveyResponse(
+          playerId: playerId,
+          submittedAt: clock(),
+          games: games,
+          mulligans: mulligans,
+          onThePlayGame1: onThePlayGame1,
+          sideboarded: sideboarded,
+        ),
+        clock(),
+      );
+    } on SurveyError catch (err) {
+      throw EngineError(err.message);
+    }
+    _changed();
+  }
+
+  /// Host-only: questionnaires for [tournamentId] whose two accounts disagree.
+  /// Conflicts are preserved, never resolved — the confirmed result stands.
+  List<({String matchId, List<SurveyConflict> conflicts})> surveyConflicts(
+    String tournamentId,
+  ) => [
+    for (final s in surveys.values)
+      if (s.tournamentId == tournamentId && s.conflicts.isNotEmpty)
+        (matchId: s.matchId, conflicts: s.conflicts),
+  ];
 
   // ---- card catalog (Scryfall metadata for the card-format editor/reveal) ----
 
@@ -245,6 +432,8 @@ class ServerController {
     required String name,
     required String hostPlayerId,
     HostingMode mode = HostingMode.lan,
+    String format = '',
+    String series = '',
   }) {
     final normalizedName = name.trim();
     if (normalizedName.isEmpty) throw EngineError('Tournament name required.');
@@ -258,7 +447,9 @@ class ServerController {
     engine = TournamentEngine(
       id: _uuid.v4(),
       name: normalizedName,
-      createdAt: DateTime.now(),
+      createdAt: clock(),
+      format: format.trim(),
+      series: series.trim(),
       rng: _rng,
     );
     joinCode = _shortCode();
@@ -291,6 +482,9 @@ class ServerController {
       );
     }
     e.addEntry(playerId, deckId);
+    // Freeze the list as entered. From here the player may edit the deck all
+    // they like; this event keeps the 75 they actually registered.
+    e.entryOf(playerId)!.deckRevisionId = _ensureRevision(deck, at: clock()).id;
     _changed();
   }
 
@@ -300,6 +494,10 @@ class ServerController {
   }
 
   void advanceRound() {
+    // A new round makes the previous round's questionnaires stale. Closing
+    // them is the only interaction between the two — an unanswered survey has
+    // never gated anything.
+    _closeSurveysBeforeRound();
     _requireEngine().advanceRound();
     _changed();
   }
@@ -362,6 +560,9 @@ class ServerController {
   void removeConnection(Connection c) => _connections.remove(c);
 
   void _changed() {
+    // A match may have just been confirmed; offer its questionnaire in the very
+    // same snapshot, so players see it without waiting for another event.
+    _openSurveysForConfirmedMatches();
     _persist(); // persist-then-push: durable before any client sees it
     for (final c in _connections) {
       c.send(snapshotJsonFor(c.token));
@@ -377,8 +578,12 @@ class ServerController {
   // ---- crash-resume (de)serialization -----------------------------------
 
   Map<String, dynamic> toJson() => {
+    'schema': kSaveSchemaVersion,
     'players': players.values.map((p) => p.toJson()).toList(),
+    'aliases': playerAliases,
     'decks': decks.values.map((d) => d.toJson()).toList(),
+    'revisions': deckRevisions.values.map((r) => r.toJson()).toList(),
+    'surveys': surveys.values.map((s) => s.toJson()).toList(),
     'cards': cardCatalog.values.map((c) => c.toJson()).toList(),
     'tokens': _tokenToPlayer,
     'ownerPlayerId': ownerPlayerId,
@@ -422,6 +627,9 @@ class ServerController {
     final nextCards = <String, CardInfo>{};
     final nextTokens = <String, String>{};
     final nextArchive = <TournamentEngine>[];
+    final nextRevisions = <String, DeckRevision>{};
+    final nextSurveys = <String, MatchSurvey>{};
+    final nextAliases = <String, List<String>>{};
     for (final p in (j['players'] as List)) {
       final pl = Player.fromJson(p as Map);
       nextPlayers[pl.id] = pl;
@@ -430,6 +638,18 @@ class ServerController {
       final dk = Deck.fromJson(d as Map);
       nextDecks[dk.id] = dk;
     }
+    // Absent in pre-0.0.4 saves; [migrateMissingRevisions] fills the gap below.
+    for (final r in (j['revisions'] as List? ?? const [])) {
+      final rev = DeckRevision.fromJson(r as Map);
+      nextRevisions[rev.id] = rev;
+    }
+    for (final s in (j['surveys'] as List? ?? const [])) {
+      final survey = MatchSurvey.fromJson(s as Map);
+      nextSurveys[survey.key] = survey;
+    }
+    (j['aliases'] as Map? ?? const {}).forEach((k, v) {
+      nextAliases[k as String] = [for (final a in (v as List)) a as String];
+    });
     for (final c in (j['cards'] as List? ?? const [])) {
       final ci = CardInfo.fromJson(c as Map);
       nextCards[ci.id] = ci;
@@ -471,12 +691,24 @@ class ServerController {
     archive
       ..clear()
       ..addAll(nextArchive);
+    deckRevisions
+      ..clear()
+      ..addAll(nextRevisions);
+    surveys
+      ..clear()
+      ..addAll(nextSurveys);
+    playerAliases
+      ..clear()
+      ..addAll(nextAliases);
     ownerPlayerId = nextOwnerPlayerId;
     ownerToken = nextOwnerToken;
     hostPlayerId = nextHostPlayerId;
     joinCode = nextJoinCode;
     hostingMode = nextHostingMode;
     engine = nextEngine;
+
+    // Schema migration, run last because it needs decks + archive in place.
+    migrateMissingRevisions();
   }
 
   /// End the current event. A tournament that actually started (has at least
@@ -530,12 +762,79 @@ class ServerController {
   /// Cross-tournament statistics engine over the current [archive].
   StatsEngine get stats => StatsEngine(historyEntries());
 
+  /// The normalized fact table: every settled match across history (and, by
+  /// default, the event in progress), tagged with the exact deck revision,
+  /// archetype, format and series it was played under.
+  List<MatchFact> matchFacts({bool includeActive = true}) => [
+    for (final e in [...archive, if (includeActive && engine != null) engine!])
+      ..._factsOf(e),
+  ];
+
+  Iterable<MatchFact> _factsOf(TournamentEngine e) sync* {
+    SideFact sideOf(String playerId) {
+      final entry = e.entryOf(playerId);
+      final deck = entry == null ? null : decks[entry.deckId];
+      final revision = entry == null ? null : revisionOf(entry);
+      return SideFact(
+        playerId: playerId,
+        deckId: entry?.deckId ?? '',
+        // The revision is the truth about what was played; the live deck is
+        // only a fallback for history that predates revisions.
+        revisionId: revision?.id ?? '',
+        deckName: revision?.name ?? deck?.name ?? '',
+        archetype: revision?.archetype ?? deck?.archetype ?? '',
+        dropped: entry?.dropped ?? false,
+      );
+    }
+
+    for (final played in e.playedMatches) {
+      final m = played.match;
+      yield MatchFact(
+        tournamentId: e.id,
+        tournamentName: e.name,
+        date: e.createdAt,
+        format: e.format,
+        series: e.series,
+        round: played.round,
+        matchId: m.id,
+        p1: sideOf(m.p1Id),
+        p2: m.isBye ? null : sideOf(m.p2Id!),
+        score: m.accepted ?? const GameScore(2, 0),
+        adjudicated: m.adjudicated,
+        disputed: m.disputed,
+      );
+    }
+  }
+
+  /// Typed statistics queries over [matchFacts]. Build one per screen; every
+  /// report it returns is plain data.
+  StatsService get statistics =>
+      StatsService(matchFacts(), revisions: deckRevisions);
+
+  /// Players who dropped from [tournamentId] — the piece a fact table cannot
+  /// carry, since a drop is a property of the entry, not of a match.
+  List<String> droppedIn(String tournamentId) {
+    final e = tournamentById(tournamentId);
+    if (e == null) return const [];
+    return [
+      for (final entry in e.entries)
+        if (entry.dropped) entry.playerId,
+    ];
+  }
+
+  /// Full entrant roster of [tournamentId], including players whose matches are
+  /// all still unresolved.
+  List<String> rosterOf(String tournamentId) =>
+      tournamentById(tournamentId)?.allPlayerIds ?? const [];
+
   /// A full read-only view of one tournament for the history detail screen:
   /// final standings, the roster with decklists, and every round's results.
   Map<String, dynamic> historyDetail(TournamentEngine e) => {
     'id': e.id,
     'name': e.name,
     'date': e.createdAt.toIso8601String(),
+    'format': e.format,
+    'series': e.series,
     'status': e.status.name,
     'roundCount': e.rounds.length,
     'playerCount': e.entries.length,
@@ -545,11 +844,20 @@ class ServerController {
         {
           'playerId': x.playerId,
           'nickname': players[x.playerId]?.nickname ?? '?',
-          'deckName': decks[x.deckId]?.name ?? '?',
+          'deckName': revisionOf(x)?.name ?? decks[x.deckId]?.name ?? '?',
           'dropped': x.dropped,
           'record': _recordString(e, x.playerId),
-          'main': decks[x.deckId]?.mainboardText ?? '',
-          'side': decks[x.deckId]?.sideboardText ?? '',
+          // The list registered for this event, never the edited-since deck.
+          'main':
+              revisionOf(x)?.mainboardText ??
+              decks[x.deckId]?.mainboardText ??
+              '',
+          'side':
+              revisionOf(x)?.sideboardText ??
+              decks[x.deckId]?.sideboardText ??
+              '',
+          'revisionId': revisionOf(x)?.id,
+          'listIsReconstructed': revisionOf(x)?.migrated ?? true,
         },
     ],
     'rounds': [
@@ -707,6 +1015,9 @@ class ServerController {
           m.infraction[viewerId] == null &&
           m.state != MatchState.confirmed,
       'confirmed': m.state == MatchState.confirmed,
+      // Optional questionnaire. Only ever the viewer's own answers plus whether
+      // the opponent responded — never the opponent's answers.
+      'survey': surveys[surveyKey(e.id, m.id)]?.viewFor(viewerId, clock()),
     };
   }
 
@@ -714,17 +1025,22 @@ class ServerController {
     final entry = e.entries.where((x) => x.playerId == playerId).firstOrNull;
     if (entry == null) return null;
     final d = decks[entry.deckId];
-    if (d == null) return null;
+    // Reveal the list as *registered for this event*, not whatever the deck has
+    // been edited into since. Falls back to the live deck for pre-revision data.
+    final r = revisionOf(entry);
+    if (r == null && d == null) return null;
+    final mainCards = r?.mainCards ?? d!.mainCards;
+    final sideCards = r?.sideCards ?? d!.sideCards;
     return {
-      'deckId': d.id,
-      'name': d.name,
-      'mainboard': d.mainboardText,
-      'sideboard': d.sideboardText,
+      'deckId': entry.deckId,
+      'name': r?.name ?? d!.name,
+      'mainboard': r?.mainboardText ?? d!.mainboardText,
+      'sideboard': r?.sideboardText ?? d!.sideboardText,
       // Structured card-format data (with cached-image paths) when resolved.
-      'cards': d.hasCards
+      'cards': (mainCards.isNotEmpty || sideCards.isNotEmpty)
           ? [
-              for (final c in d.mainCards) _cardJson(c, 'main'),
-              for (final c in d.sideCards) _cardJson(c, 'side'),
+              for (final c in mainCards) _cardJson(c, 'main'),
+              for (final c in sideCards) _cardJson(c, 'side'),
             ]
           : null,
     };

@@ -25,6 +25,14 @@ class TournamentEngine {
   final DateTime createdAt;
   final Random _rng;
 
+  /// Free-text format ("Modern", "Standard", "Cube"). Empty when unspecified —
+  /// statistics simply group those together under "Unspecified".
+  final String format;
+
+  /// Free-text league/series name. Tournaments sharing one are a series; there
+  /// is deliberately no separate Series entity to create and keep in sync.
+  final String series;
+
   TournamentStatus status = TournamentStatus.lobby;
   final List<Entry> entries = [];
   final List<Round> rounds = [];
@@ -34,6 +42,8 @@ class TournamentEngine {
     required this.id,
     required this.name,
     required this.createdAt,
+    this.format = '',
+    this.series = '',
     Random? rng,
   }) : _rng = rng ?? Random();
 
@@ -137,6 +147,7 @@ class TournamentEngine {
       m.accepted = null;
       m.state = MatchState.needsReview;
       m.reviewReason = ReviewReason.resultMismatch;
+      m.disputed = true;
     }
   }
 
@@ -160,6 +171,7 @@ class TournamentEngine {
     if (!ok) {
       m.state = MatchState.needsReview;
       m.reviewReason = ReviewReason.infractionReported;
+      m.disputed = true;
       return;
     }
     _settleIfFullyConfirmed(m);
@@ -185,8 +197,12 @@ class TournamentEngine {
     _validateScore(result);
     final m = _match(matchId);
     if (m.isBye) throw EngineError('A bye needs no resolution.');
+    // Record *why* the host stepped in before clearing the reason: statistics
+    // separate "the players disagreed" from "the host corrected a typo".
+    if (m.state == MatchState.needsReview) m.disputed = true;
     m.accepted = result;
     m.hostNote = note;
+    m.adjudicated = true;
     m.state = MatchState.confirmed;
     m.reviewReason = ReviewReason.none;
   }
@@ -263,6 +279,22 @@ class TournamentEngine {
   /// history (see [TournamentHistoryEntry]).
   List<MatchRecord> get matchRecords => _recordsSoFar().toList();
 
+  /// Every match with a known result, tagged with its round number. This is the
+  /// input the statistics layer denormalizes into facts; unresolved matches are
+  /// skipped so an in-progress event contributes only what is settled.
+  Iterable<({int round, Match match})> get playedMatches sync* {
+    for (final r in rounds) {
+      for (final m in r.matches) {
+        if (m.accepted == null && !m.isBye) continue;
+        yield (round: r.number, match: m);
+      }
+    }
+  }
+
+  /// The [Entry] for [playerId], or null if they never entered.
+  Entry? entryOf(String playerId) =>
+      entries.where((e) => e.playerId == playerId).firstOrNull;
+
   // ---- Internals ---------------------------------------------------------
 
   void _appendRoundFrom(Pairing p) {
@@ -316,6 +348,8 @@ class TournamentEngine {
     'id': id,
     'name': name,
     'createdAt': createdAt.toIso8601String(),
+    if (format.isNotEmpty) 'format': format,
+    if (series.isNotEmpty) 'series': series,
     'status': status.name,
     'plannedRounds': plannedRounds,
     'entries': entries.map((e) => e.toJson()).toList(),
@@ -327,6 +361,8 @@ class TournamentEngine {
       id: j['id'] as String,
       name: j['name'] as String,
       createdAt: DateTime.parse(j['createdAt'] as String),
+      format: (j['format'] as String?) ?? '',
+      series: (j['series'] as String?) ?? '',
       rng: rng,
     );
     e.status = TournamentStatus.values.byName(j['status'] as String);

@@ -6,6 +6,8 @@ import '../services/app_update.dart';
 import '../services/export_data.dart';
 import '../shared/models.dart';
 import 'app_scope.dart';
+import 'data_exchange_card.dart';
+import 'player_profile_screen.dart';
 
 /// Profile tab — the durable device-owner identity (FR-01/02, Q1) and their
 /// lifetime statistics aggregated from real tournament history. Real data only;
@@ -164,6 +166,19 @@ class _ProfileBody extends StatelessWidget {
             ),
           ),
         ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => PlayerProfileScreen(playerId: owner.id),
+            ),
+          ),
+          icon: const Icon(Icons.query_stats),
+          label: const Text('My full statistics'),
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size.fromHeight(48),
+          ),
+        ),
         if (life.tournamentsPlayed == 0) ...[
           const SizedBox(height: 16),
           Text(
@@ -202,6 +217,8 @@ class _ProfileBody extends StatelessWidget {
             textAlign: TextAlign.center,
           ),
         ),
+        const SizedBox(height: 16),
+        const DataExchangeCard(),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: () => checkForUpdate(context, silent: false),

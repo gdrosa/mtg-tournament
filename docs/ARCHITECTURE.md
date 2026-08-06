@@ -81,6 +81,49 @@ directory. The whole JSON document is also the unit of optional Drive backup.
 Imports are decoded into temporary collections and adopted only after the full
 document validates, so a malformed backup cannot partially erase live state.
 
+## History, revisions, and statistics
+
+Two rules keep historical data honest.
+
+**A tournament entry references an immutable `DeckRevision`, not a deck.** A
+`Deck` stays editable forever, so pointing history at a deck id would mean that
+editing a deck silently rewrites results from months ago. Entering a tournament
+freezes the list; revision ids are content-addressed, so re-entering an
+unchanged deck reuses one and two devices holding the same list agree on the
+same id. Saves written before revisions existed are back-filled on load from
+the deck's current list and flagged `migrated`, and every screen that shows
+such a list says it was reconstructed.
+
+**Statistics are folds over a fact table, never computed in a widget.**
+`ServerController.matchFacts()` denormalizes every settled match into a
+`MatchFact` carrying the deck revision, archetype, format, series, round, and
+whether the result was disputed or host-adjudicated. `StatsService` turns
+(facts, filter, subject) into plain report objects: tournament, player, deck,
+revision, head-to-head, matchup matrix, monthly trends, and Glicko-2 rating
+history. Every rate travels with its sample size and a Wilson interval, so the
+UI can never present a 3-1 record as a 75% deck.
+
+The store remains the single JSON document rather than a relational database:
+the fact table is rebuilt on demand from a few thousand matches at most, which
+keeps the whole statistics layer pure Dart and testable without a device.
+
+`lib/server/interchange.dart` handles versioned bundles. Imports are staged
+and validated in full before any live state is touched, and are additive and
+idempotent: existing records win, new ones are appended, nothing is deleted.
+Players are matched by stable id only — a shared nickname is surfaced as a
+suggestion the organizer must confirm, never an automatic merge.
+
+## Post-match questionnaire
+
+An optional questionnaire opens when a non-bye match is confirmed and asks only
+for facts the app cannot derive: per-game results, mulligans, who was on the
+play, whether anyone sideboarded. It expires on a timer, closes when the round
+advances, and has no path to change a confirmed result — submitting, skipping,
+and ignoring it are identical as far as the tournament is concerned. Raw
+answers are private to the answering player and to a full local backup; when
+both players answer, incompatible accounts are recorded as conflicts for the
+organizer rather than reconciled to one side.
+
 ## Tournament lifecycle
 
 The state machine uses `lobby`, `running`, and `finished` phases.
@@ -107,15 +150,17 @@ through snapshots and WebSocket pushes. Important route groups are:
 | --- | --- |
 | `/api/join`, `/api/deck`, `/api/enter` | Session, deck, and event entry |
 | `/api/result`, `/api/infraction` | Player match commands |
+| `/api/survey` | Optional post-match questionnaire (never affects a result) |
 | `/api/host/*` | Host-authorized lifecycle and adjudication commands |
 | `/api/snapshot`, `/ws` | Initial and realtime read models |
 | `/cards/img/<id>` | Cached card images |
 
 Snapshots are tailored to the authenticated viewer. Host-only pairing reports,
-infraction reporter names, and adjudication details are excluded from player or
-anonymous snapshots.
+infraction reporter names, adjudication details, and other players'
+questionnaire answers are excluded from player or anonymous snapshots — a
+viewer only ever sees their own answers plus whether the opponent responded.
 
-In Online mode the browser sends those same five player mutations through its
+In Online mode the browser sends those same six player mutations through its
 WebSocket. A Durable Object assigns the browser an opaque connection ID and
 forwards frames to the host phone. The phone maps each browser to the existing
 `Connection` abstraction and dispatches allowed mutations against the same
@@ -188,5 +233,12 @@ GitHub Actions runs the Flutter and relay checks for pushes and pull requests.
 - The player client and Dart snapshot schema are maintained manually rather
   than generated from a shared protocol definition.
 - Persistence is a single JSON document rather than a transactional database.
+  The statistics layer is written against a fact table and typed report
+  services, so swapping the store for SQLite would not change any formula.
+- Importing a bundle reads it from the clipboard; there is no file picker,
+  because `file_picker` requires `win32 ^5.9` while the `share_plus` already in
+  the app requires `^6.0`.
+- A player who has the app installed still joins events through the browser
+  client; the app has no player mode that reuses their local profile and decks.
 - Release signing and Google OAuth configuration are deployment-owner concerns
   and are intentionally excluded from version control.

@@ -713,6 +713,8 @@ class HostController extends ChangeNotifier {
     required String name,
     required String nickname,
     required HostingMode mode,
+    String format = '',
+    String series = '',
   }) async {
     if (hasActiveEvent) throw StateError('A tournament is already active.');
     final generation = ++_transportGeneration;
@@ -737,6 +739,8 @@ class HostController extends ChangeNotifier {
       name: name,
       hostPlayerId: s.playerId,
       mode: mode,
+      format: format,
+      series: series,
     );
     final eventId = server.engine!.id;
     _hostingEnabled = true;
@@ -795,6 +799,7 @@ class HostController extends ChangeNotifier {
     required String name,
     required String main,
     required String side,
+    String archetype = '',
   }) {
     final s = server.ensureOwner(nickname);
     // saveDeck already persists + broadcasts (and triggers background image
@@ -804,7 +809,18 @@ class HostController extends ChangeNotifier {
       name: name,
       mainboard: main,
       sideboard: side,
+      archetype: archetype,
     );
+  }
+
+  /// Label a deck with an archetype so it groups with other players' versions
+  /// of the same deck in matchup statistics. Purely a statistics label — it
+  /// changes nothing about the list or any past result.
+  void setDeckArchetype(String deckId, String archetype) {
+    final d = server.decks[deckId];
+    if (d == null) return;
+    server.decks[deckId] = d.copyWith(archetype: archetype.trim());
+    server.persistAndNotify();
   }
 
   /// Set or update the device owner's nickname (Profile tab).

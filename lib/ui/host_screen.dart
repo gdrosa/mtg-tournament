@@ -193,10 +193,18 @@ class _HostScreenState extends State<HostScreen> {
     String deck = '',
     String main = '',
     String side = '',
+    String format = '',
+    String series = '',
   }) async {
     await _guard(() async {
       try {
-        await c.createEvent(name: name, nickname: nick, mode: mode);
+        await c.createEvent(
+          name: name,
+          nickname: nick,
+          mode: mode,
+          format: format,
+          series: series,
+        );
       } on RelayException catch (e) {
         // The relay only refuses this way when the build's provisioning key is
         // missing or revoked, and the organizer can fix it here and now.
@@ -204,7 +212,13 @@ class _HostScreenState extends State<HostScreen> {
         final key = await _askProvisionKey();
         if (key == null) return; // cancelled: nothing was created
         await c.setRelayProvisionKey(key);
-        await c.createEvent(name: name, nickname: nick, mode: mode);
+        await c.createEvent(
+          name: name,
+          nickname: nick,
+          mode: mode,
+          format: format,
+          series: series,
+        );
       }
       if (existingDeckId != null) {
         c.joinWithDeck(existingDeckId);
@@ -840,6 +854,8 @@ class _CreateForm extends StatefulWidget {
     String deck,
     String main,
     String side,
+    String format,
+    String series,
   })
   onCreate;
   final String initialNick;
@@ -861,6 +877,9 @@ class _CreateFormState extends State<_CreateForm> {
   final deck = TextEditingController();
   final main = TextEditingController();
   final side = TextEditingController();
+  // Optional, and only ever used for grouping in statistics.
+  final format = TextEditingController();
+  final series = TextEditingController();
   bool _busy = false;
   HostingMode? _mode;
   // The owner's saved deck to play with; null = "create a new deck below".
@@ -878,7 +897,7 @@ class _CreateFormState extends State<_CreateForm> {
 
   @override
   void dispose() {
-    for (final c in [name, nick, deck, main, side]) {
+    for (final c in [name, nick, deck, main, side, format, series]) {
       c.dispose();
     }
     super.dispose();
@@ -936,6 +955,11 @@ class _CreateFormState extends State<_CreateForm> {
         const SizedBox(height: 12),
         _field('Event name', name, hint: 'e.g. Friday Night Modern'),
         _field('Your nickname', nick, hint: 'e.g. Giuseppe'),
+        // Optional labels. They change nothing about how the event runs; they
+        // are what lets statistics say "your Modern record" or "the spring
+        // league" later on.
+        _field('Format (optional)', format, hint: 'e.g. Modern'),
+        _field('Series or league (optional)', series, hint: 'e.g. Spring 2026'),
         if (decks.isNotEmpty) ...[
           Text('Your deck', style: theme.textTheme.labelLarge),
           const SizedBox(height: 6),
@@ -1013,6 +1037,8 @@ class _CreateFormState extends State<_CreateForm> {
         nick.text.trim(),
         mode: _mode!,
         existingDeckId: _selectedDeckId,
+        format: format.text.trim(),
+        series: series.text.trim(),
       );
     } else {
       await widget.onCreate(
@@ -1022,6 +1048,8 @@ class _CreateFormState extends State<_CreateForm> {
         deck: deck.text.trim(),
         main: main.text,
         side: side.text,
+        format: format.text.trim(),
+        series: series.text.trim(),
       );
     }
     if (mounted) setState(() => _busy = false);

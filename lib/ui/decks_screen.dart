@@ -9,6 +9,7 @@ import '../shared/stats.dart';
 import 'app_scope.dart';
 import 'card_prep.dart';
 import 'deck_editor_screen.dart';
+import 'deck_profile_screen.dart';
 
 /// Decks tab — the device owner's named decks (FR-09/12) with their lifetime
 /// record aggregated from real tournament history (FR-44/45). Real data only;
@@ -59,6 +60,12 @@ class DecksScreen extends StatelessWidget {
                     ),
                   ),
                   onDelete: () => _confirmDelete(context, c, d),
+                  onArchetype: () => _editArchetype(context, c, d),
+                  onStats: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => DeckProfileScreen(deckId: d.id),
+                    ),
+                  ),
                 );
               },
             ),
@@ -103,6 +110,49 @@ class DecksScreen extends StatelessWidget {
     }
   }
 
+  Future<void> _editArchetype(
+    BuildContext context,
+    HostController c,
+    Deck d,
+  ) async {
+    final ctrl = TextEditingController(text: d.archetype);
+    final value = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Archetype'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Group this deck with other players\' versions of the same deck '
+              'in matchup statistics. Leave empty to use the deck name.',
+              style: Theme.of(ctx).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'e.g. Izzet Murktide',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (value != null) c.setDeckArchetype(d.id, value);
+  }
+
   Future<void> _openDeckForm(BuildContext context, HostController c) async {
     final needsNick = c.server.owner == null;
     await Navigator.of(context).push(
@@ -121,11 +171,15 @@ class _DeckCard extends StatelessWidget {
   final Record record;
   final VoidCallback onTap;
   final VoidCallback onDelete;
+  final VoidCallback onArchetype;
+  final VoidCallback onStats;
   const _DeckCard({
     required this.deck,
     required this.record,
     required this.onTap,
     required this.onDelete,
+    required this.onArchetype,
+    required this.onStats,
   });
 
   @override
@@ -183,8 +237,26 @@ class _DeckCard extends StatelessWidget {
                 tooltip: 'Deck options',
                 onSelected: (v) {
                   if (v == 'delete') onDelete();
+                  if (v == 'archetype') onArchetype();
+                  if (v == 'stats') onStats();
                 },
                 itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    value: 'stats',
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.query_stats),
+                      title: Text('Statistics'),
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'archetype',
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.label_outline),
+                      title: Text('Set archetype'),
+                    ),
+                  ),
                   PopupMenuItem(
                     value: 'delete',
                     child: ListTile(
@@ -354,11 +426,12 @@ class _DeckFormScreen extends StatefulWidget {
 class _DeckFormScreenState extends State<_DeckFormScreen> {
   late final nick = TextEditingController(text: widget.suggestedNick);
   final name = TextEditingController();
+  final archetype = TextEditingController();
   final list = TextEditingController();
 
   @override
   void dispose() {
-    for (final c in [nick, name, list]) {
+    for (final c in [nick, name, archetype, list]) {
       c.dispose();
     }
     super.dispose();
@@ -384,6 +457,11 @@ class _DeckFormScreenState extends State<_DeckFormScreen> {
             _field('Your nickname', nick, hint: 'e.g. Giuseppe'),
           ],
           _field('Deck name', name, hint: 'e.g. Domain Zoo'),
+          _field(
+            'Archetype (optional)',
+            archetype,
+            hint: 'e.g. Domain Zoo — groups it with other players\' versions',
+          ),
           _field(
             'Decklist',
             list,
@@ -424,6 +502,7 @@ class _DeckFormScreenState extends State<_DeckFormScreen> {
       name: name.text.trim(),
       main: split.main,
       side: split.side,
+      archetype: archetype.text.trim(),
     );
     Navigator.of(context).pop();
   }

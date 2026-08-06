@@ -49,6 +49,10 @@ class Deck {
   final String id; // stable id independent of [name] so renames keep history
   final String ownerId;
   final String name;
+
+  /// Optional archetype label ("Domain Zoo", "Izzet Murktide") used to group
+  /// different players' decks in matchup statistics. Empty → use [name].
+  final String archetype;
   final String mainboardText;
   final String sideboardText;
   final List<DeckCardEntry> mainCards;
@@ -57,6 +61,7 @@ class Deck {
     required this.id,
     required this.ownerId,
     required this.name,
+    this.archetype = '',
     required this.mainboardText,
     required this.sideboardText,
     this.mainCards = const [],
@@ -67,8 +72,13 @@ class Deck {
   /// shown in card format rather than as plain text).
   bool get hasCards => mainCards.isNotEmpty || sideCards.isNotEmpty;
 
+  /// Archetype for grouping — the explicit label, else the deck name.
+  String get effectiveArchetype =>
+      archetype.trim().isEmpty ? name.trim() : archetype.trim();
+
   Deck copyWith({
     String? name,
+    String? archetype,
     String? mainboardText,
     String? sideboardText,
     List<DeckCardEntry>? mainCards,
@@ -77,6 +87,7 @@ class Deck {
     id: id,
     ownerId: ownerId,
     name: name ?? this.name,
+    archetype: archetype ?? this.archetype,
     mainboardText: mainboardText ?? this.mainboardText,
     sideboardText: sideboardText ?? this.sideboardText,
     mainCards: mainCards ?? this.mainCards,
@@ -87,6 +98,7 @@ class Deck {
     'id': id,
     'ownerId': ownerId,
     'name': name,
+    if (archetype.isNotEmpty) 'archetype': archetype,
     'main': mainboardText,
     'side': sideboardText,
     'mainCards': mainCards.map((e) => e.toJson()).toList(),
@@ -96,6 +108,7 @@ class Deck {
     id: j['id'] as String,
     ownerId: j['ownerId'] as String,
     name: j['name'] as String,
+    archetype: j['archetype'] as String? ?? '',
     mainboardText: j['main'] as String? ?? '',
     sideboardText: j['side'] as String? ?? '',
     mainCards: [
@@ -110,19 +123,31 @@ class Deck {
 }
 
 /// A player's enrollment in one tournament (which deck they brought).
+///
+/// [deckRevisionId] pins the exact, immutable list played at this event. It is
+/// null only in saves written before revisions existed; the controller
+/// back-fills those on load, so treat null as "unknown historical list".
 class Entry {
   final String playerId;
   final String deckId;
+  String? deckRevisionId;
   bool dropped;
-  Entry({required this.playerId, required this.deckId, this.dropped = false});
+  Entry({
+    required this.playerId,
+    required this.deckId,
+    this.deckRevisionId,
+    this.dropped = false,
+  });
   Map<String, dynamic> toJson() => {
     'playerId': playerId,
     'deckId': deckId,
+    if (deckRevisionId != null) 'revisionId': deckRevisionId,
     'dropped': dropped,
   };
   factory Entry.fromJson(Map j) => Entry(
     playerId: j['playerId'] as String,
     deckId: j['deckId'] as String,
+    deckRevisionId: j['revisionId'] as String?,
     dropped: j['dropped'] as bool? ?? false,
   );
 }
@@ -179,6 +204,15 @@ class Match {
   ReviewReason reviewReason;
   String? hostNote;
 
+  /// True once the host set the result by hand (adjudication). Sticky: the
+  /// statistics layer reports adjudicated results separately from player-agreed
+  /// ones, so this must survive the match reaching [MatchState.confirmed].
+  bool adjudicated = false;
+
+  /// True if this match was ever escalated for review (mismatch or infraction),
+  /// even after it was resolved. Also sticky, for the same reason.
+  bool disputed = false;
+
   Match({
     required this.id,
     required this.p1Id,
@@ -209,6 +243,8 @@ class Match {
     'state': state.name,
     'review': reviewReason.name,
     'hostNote': hostNote,
+    if (adjudicated) 'adjudicated': true,
+    if (disputed) 'disputed': true,
     'accepted': accepted?.toJson(),
     'subs': submissions.map((k, v) => MapEntry(k, v.toJson())),
     'infr': infraction,
@@ -223,6 +259,13 @@ class Match {
       reviewReason: ReviewReason.values.byName(j['review'] as String),
     );
     m.hostNote = j['hostNote'] as String?;
+    m.adjudicated = j['adjudicated'] == true;
+    // Pre-adjudication saves: a note only ever came from the host resolving it.
+    if (!m.adjudicated && m.hostNote != null) m.adjudicated = true;
+    m.disputed =
+        j['disputed'] == true ||
+        m.reviewReason != ReviewReason.none ||
+        m.adjudicated;
     m.accepted = j['accepted'] == null
         ? null
         : GameScore.fromJson(j['accepted'] as Map);

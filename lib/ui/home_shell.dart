@@ -9,6 +9,7 @@ import 'events_screen.dart';
 import 'format.dart';
 import 'host_screen.dart';
 import 'profile_screen.dart';
+import 'stats_screen.dart';
 import 'tournament_detail_screen.dart';
 
 /// App root: show the first-run account gate until the user signs in or chooses
@@ -52,6 +53,7 @@ class _HomeShellState extends State<HomeShell> {
     _HomeTab(),
     DecksScreen(),
     EventsScreen(),
+    StatsScreen(),
     ProfileScreen(),
   ];
 
@@ -80,6 +82,11 @@ class _HomeShellState extends State<HomeShell> {
             icon: Icon(Icons.emoji_events_outlined),
             selectedIcon: Icon(Icons.emoji_events),
             label: 'Events',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.query_stats_outlined),
+            selectedIcon: Icon(Icons.query_stats),
+            label: 'Stats',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),

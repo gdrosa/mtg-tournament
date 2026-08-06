@@ -235,6 +235,7 @@ class OnlineRelayBridge {
     '/api/enter',
     '/api/result',
     '/api/infraction',
+    '/api/survey',
   };
 
   final ServerController controller;

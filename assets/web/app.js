@@ -30,6 +30,11 @@ const pendingRequests = new Map();
 // UI-only: player tapped "Change my report" to re-enter a score. Reset whenever
 // a fresh authoritative snapshot arrives (we never mutate snap from the UI).
 let editing = false;
+// Optional post-match questionnaire, drafted locally until sent. Kept outside
+// `snap` so a fresh snapshot never wipes half-typed answers, and keyed by match
+// so it resets when a new round pairs you.
+let surveyDraft = null;
+const surveySkipped = new Set();
 
 const $app = document.getElementById('app');
 const $round = document.getElementById('round');
@@ -274,6 +279,31 @@ const sendResult = (matchId, mineWon, oppWon, draws) =>
 const sendInfraction = (matchId, ok) =>
   post('/api/infraction', { matchId, ok }).then(() => toast(ok ? 'Confirmed — no infractions' : 'Infraction reported'));
 
+// ---- optional questionnaire ----
+function ensureSurveyDraft(survey) {
+  if (surveyDraft && surveyDraft.matchId === survey.matchId) return surveyDraft;
+  surveyDraft = {
+    matchId: survey.matchId,
+    games: new Array(survey.games).fill('unknown'),
+    mulls: new Array(survey.games).fill('unknown'),
+    play1: 'unknown',
+    sb: 'unknown',
+  };
+  return surveyDraft;
+}
+
+function sendSurvey() {
+  if (!surveyDraft) return Promise.resolve();
+  const draft = surveyDraft;
+  return post('/api/survey', {
+    matchId: draft.matchId,
+    games: draft.games,
+    mulls: draft.mulls,
+    play1: draft.play1,
+    sb: draft.sb,
+  }).then(() => toast('Thanks — saved as your own report'));
+}
+
 // ---- render ----
 function render() {
   if (!snap) return;
@@ -322,6 +352,21 @@ $app.addEventListener('click', (event) => {
     sendInfraction(button.dataset.matchId, button.dataset.ok === 'true').catch(() => {});
   } else if (action === 'change-report') {
     editing = true;
+    render();
+  } else if (action === 'survey-set') {
+    if (!surveyDraft) return;
+    const field = button.dataset.field;
+    const value = button.dataset.value;
+    const game = button.dataset.game;
+    if (field === 'game') surveyDraft.games[Number(game)] = value;
+    else if (field === 'mull') surveyDraft.mulls[Number(game)] = value;
+    else surveyDraft[field] = value;
+    render();
+  } else if (action === 'survey-send') {
+    sendSurvey().catch(() => {});
+  } else if (action === 'survey-skip') {
+    // Skipping is immediate and local: nothing is sent, nothing is recorded.
+    if (surveyDraft) surveySkipped.add(surveyDraft.matchId);
     render();
   }
 });
@@ -451,6 +496,48 @@ function matchCard() {
       body += `<p class="muted">You confirmed. Waiting for your opponent.</p>`;
     }
   }
+  return `<div class="card">${body}</div>` + surveyCard(m.survey);
+}
+
+const MULL_LABELS = [['zero', '0'], ['one', '1'], ['two', '2'], ['threePlus', '3+'], ['unknown', '?']];
+const GAME_LABELS = [['win', 'Won'], ['loss', 'Lost'], ['draw', 'Draw'], ['unknown', '?']];
+const TRI_PLAY = [['yes', 'On the play'], ['no', 'On the draw'], ['unknown', '?']];
+const TRI_YESNO = [['yes', 'Yes'], ['no', 'No'], ['unknown', '?']];
+
+function optRow(field, game, options, selected) {
+  return `<div class="opts">` + options.map(([value, label]) =>
+    `<button class="opt${value === selected ? ' sel' : ''}" data-action="survey-set"
+      data-field="${esc(field)}" data-game="${game}" data-value="${esc(value)}">${esc(label)}</button>`
+  ).join('') + `</div>`;
+}
+
+// Facts only, and only facts the app cannot work out for itself. No questions
+// about play quality, matchup feel, or why a match went the way it did.
+function surveyCard(survey) {
+  if (!survey || !survey.open) return '';
+  if (survey.answered) {
+    return `<div class="card"><h3 style="margin-top:0">Thanks</h3>
+      <p class="muted">Your answers are saved and stay private to you.
+      ${survey.opponentAnswered ? 'Your opponent has answered too.' : ''}</p></div>`;
+  }
+  if (surveySkipped.has(survey.matchId)) return '';
+
+  const draft = ensureSurveyDraft(survey);
+  let body = `<h3 style="margin-top:0">Optional &mdash; about 30 seconds</h3>
+    <p class="muted">A few facts the app can't work out on its own. Entirely optional,
+    private to you, and it never changes the confirmed result.</p>`;
+  for (let g = 0; g < survey.games; g++) {
+    body += `<label>Game ${g + 1} result</label>${optRow('game', g, GAME_LABELS, draft.games[g])}
+      <label>Your mulligans in game ${g + 1}</label>${optRow('mull', g, MULL_LABELS, draft.mulls[g])}`;
+  }
+  body += `<label>Game 1</label>${optRow('play1', 0, TRI_PLAY, draft.play1)}`;
+  if (survey.asksSideboard) {
+    body += `<label>Did you change cards between games?</label>${optRow('sb', 0, TRI_YESNO, draft.sb)}`;
+  }
+  body += `<div class="spacer"></div><div class="row">
+      <button class="primary" data-action="survey-send">Send</button>
+      <button class="ghost" data-action="survey-skip">Skip</button>
+    </div>`;
   return `<div class="card">${body}</div>`;
 }
 

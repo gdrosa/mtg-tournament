@@ -73,6 +73,15 @@ button:active { transform: translateY(1px); }
 .score-btn .big { display: block; font-size: 20px; }
 .score-btn .lbl { display: block; font-size: 12px; color: var(--muted); font-weight: 600; }
 
+/* Questionnaire answers: one tap each, wrapping so 3+ options fit any phone. */
+.opts { display: flex; flex-wrap: wrap; gap: 8px; }
+.opt {
+  width: auto; flex: 1 1 auto; min-width: 64px;
+  min-height: 44px; padding: 10px 12px; font-size: 14px;
+  background: var(--surface-hi); color: var(--text); border: 1px solid var(--line);
+}
+.opt.sel { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
+
 .pill { display:inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .pill.wait { background: rgba(242,160,7,.18); color: var(--primary); }
 .pill.ok { background: rgba(62,207,142,.18); color: var(--good); }

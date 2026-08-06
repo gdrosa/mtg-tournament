@@ -24,7 +24,10 @@ import '../server/controller.dart';
     ..remove('tokens')
     ..remove('ownerToken')
     ..remove('joinCode')
-    ..remove('hostingMode');
+    ..remove('hostingMode')
+    // Questionnaire answers are each player's own private report. A shared
+    // export goes to someone else, so they never travel in one.
+    ..remove('surveys');
   final stamp = now.toIso8601String().split('T').first;
   return (
     name: 'mtg-tourney-$stamp.json.gz',

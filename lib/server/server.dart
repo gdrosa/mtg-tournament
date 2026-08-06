@@ -14,6 +14,7 @@ import 'package:shelf_router/shelf_router.dart';
 import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../shared/questionnaire.dart';
 import '../shared/tournament_engine.dart';
 import 'controller.dart';
 
@@ -27,6 +28,23 @@ Future<Map<String, dynamic>> _body(Request r) async {
   final s = await r.readAsString();
   if (s.isEmpty) return {};
   return (jsonDecode(s) as Map).cast<String, dynamic>();
+}
+
+/// Read one enum name from untrusted client JSON, falling back to [fallback].
+/// An unrecognised answer becomes "don't remember" rather than a 500.
+T _enumValue<T extends Enum>(Object? raw, List<T> values, T fallback) {
+  if (raw is! String) return fallback;
+  for (final v in values) {
+    if (v.name == raw) return v;
+  }
+  return fallback;
+}
+
+/// Same, for a list of answers. Capped at 3 — a match is best-of-three, and an
+/// oversized list must not become an oversized snapshot.
+List<T> _enumList<T extends Enum>(Object? raw, List<T> values, T fallback) {
+  if (raw is! List) return const [];
+  return [for (final x in raw.take(3)) _enumValue(x, values, fallback)];
 }
 
 /// Runs [fn] and maps an [EngineError] to a 400 JSON error.
@@ -166,6 +184,34 @@ Handler buildHandler(
         playerId: pid,
         matchId: b['matchId'] as String,
         ok: b['ok'] == true,
+      );
+      return {'ok': true};
+    });
+  });
+
+  // Optional post-match questionnaire. Purely additive: it can only ever store
+  // self-reported answers, never touch the confirmed result, and a player who
+  // ignores it is in exactly the same position as one who fills it in.
+  api.post('/api/survey', (Request r) async {
+    final b = await _body(r);
+    final pid = c.playerIdForToken(b['token'] as String?);
+    if (pid == null) return _json({'error': 'Not authenticated.'}, status: 401);
+    return _guard(() {
+      c.submitSurvey(
+        playerId: pid,
+        matchId: b['matchId'] as String,
+        games: _enumList(b['games'], GameOutcome.values, GameOutcome.unknown),
+        mulligans: _enumList(
+          b['mulls'],
+          MulliganCount.values,
+          MulliganCount.unknown,
+        ),
+        onThePlayGame1: _enumValue(
+          b['play1'],
+          TriState.values,
+          TriState.unknown,
+        ),
+        sideboarded: _enumValue(b['sb'], TriState.values, TriState.unknown),
       );
       return {'ok': true};
     });

@@ -4,6 +4,34 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Statistics tab: one filter (date, format, series, tournament, player,
+  opponent, deck, archetype, byes) applied across players, decks, archetypes
+  and events, with player and deck profile screens behind it.
+- Immutable deck revisions. Entering a tournament freezes the exact list, so
+  editing a deck can no longer rewrite what was played; deck profiles compare
+  revisions and show the cards added and removed between them.
+- Per-tournament report: rank progression, archetype distribution, matchup
+  matrix, and counts of byes, draws, drops, disputes and adjudicated results.
+- Glicko-2 ratings with a rating deviation, so a two-match record is never
+  presented as a settled one. Every rate is shown with its sample size and a
+  95% interval.
+- Optional post-match questionnaire (game results, mulligans, play/draw,
+  sideboarding). It expires, never blocks a round, never changes a confirmed
+  result, keeps each player's answers private from their opponent, and records
+  conflicting accounts instead of picking one.
+- Versioned import/export: full backup, one tournament, a player history, a
+  deck library, CSV, and anonymized aggregates. Imports are previewed, atomic,
+  idempotent and cumulative — they add to your data and never replace it.
+- Optional format and series/league on an event, and an optional archetype on
+  a deck, purely as grouping labels for statistics.
+
+### Changed
+
+- Decklist reveal and tournament history show the list as registered for that
+  event, and mark a list as reconstructed when it predates deck revisions.
+
 ## [0.0.3] - 2026-08-05
 
 ### Added

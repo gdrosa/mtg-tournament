@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../host/host_controller.dart';
+import '../server/interchange.dart';
+import '../services/data_exchange.dart';
 import 'app_scope.dart';
 import 'format.dart';
+import 'player_profile_screen.dart';
+import 'stats_widgets.dart';
 
 /// Read-only view of one (archived) tournament: final standings, the roster
 /// with each player's named deck + decklist, and every round's results.
@@ -34,6 +38,35 @@ class TournamentDetailScreen extends StatelessWidget {
       appBar: AppBar(
         title: Text(d['name'] as String),
         actions: [
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.ios_share),
+            tooltip: 'Share this tournament',
+            onSelected: (v) {
+              if (v == 'bundle') {
+                shareBundle(
+                  c.server,
+                  scope: BundleScope.tournament,
+                  tournamentId: tournamentId,
+                  filenameHint: 'tournament',
+                );
+              } else if (v == 'standings') {
+                shareCsv(
+                  standingsCsv(c.server, tournamentId),
+                  'mtg-standings.csv',
+                );
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'bundle',
+                child: Text('Share tournament (importable)'),
+              ),
+              PopupMenuItem(
+                value: 'standings',
+                child: Text('Share standings (CSV)'),
+              ),
+            ],
+          ),
           IconButton(
             tooltip: 'Delete tournament',
             icon: const Icon(Icons.delete_outline),
@@ -52,10 +85,13 @@ class TournamentDetailScreen extends StatelessWidget {
           Text(
             '${formatDate(DateTime.parse(d['date'] as String))} · '
             '${_plural(d['playerCount'] as int, 'player')} · '
-            '${_plural(d['roundCount'] as int, 'round')}',
+            '${_plural(d['roundCount'] as int, 'round')}'
+            '${(d['format'] as String).isEmpty ? '' : ' · ${d['format']}'}'
+            '${(d['series'] as String).isEmpty ? '' : ' · ${d['series']}'}',
             style: theme.textTheme.bodyMedium,
           ),
           const SizedBox(height: 16),
+          _TournamentStats(tournamentId: tournamentId),
           _section(context, 'Final standings'),
           Card(
             child: Padding(
@@ -195,6 +231,103 @@ class TournamentDetailScreen extends StatelessWidget {
   }
 }
 
+/// Computed view of one event: what happened beyond the raw pairings.
+class _TournamentStats extends StatelessWidget {
+  final String tournamentId;
+  const _TournamentStats({required this.tournamentId});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final c = AppScope.of(context);
+    final report = c.server.statistics.tournamentReport(
+      tournamentId,
+      roster: c.server.rosterOf(tournamentId),
+      dropped: c.server.droppedIn(tournamentId),
+    );
+    if (report.roundCount == 0) return const SizedBox.shrink();
+
+    String nick(String id) => c.server.players[id]?.nickname ?? 'Unknown';
+    final conflicts = c.server.surveyConflicts(tournamentId);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        StatSection(
+          title: 'Event summary',
+          children: [
+            StatRow('Rounds', '${report.roundCount}'),
+            StatRow('Byes', '${report.byes}'),
+            StatRow('Draws', '${report.draws}'),
+            StatRow('Drops', '${report.drops}'),
+            StatRow('Disputed matches', '${report.disputes}'),
+            StatRow('Host-adjudicated results', '${report.adjudications}'),
+          ],
+        ),
+        StatSection(
+          title: 'Archetypes played',
+          children: [
+            if (report.archetypeCounts.isEmpty)
+              Text('Not recorded', style: theme.textTheme.bodySmall)
+            else
+              for (final e
+                  in (report.archetypeCounts.entries.toList()
+                    ..sort((a, b) => b.value.compareTo(a.value))))
+                StatRow(e.key, '${e.value}'),
+          ],
+        ),
+        StatSection(
+          title: 'Rank progression',
+          subtitle: 'Position after each round, in finishing order.',
+          children: [
+            for (final row in report.standings.take(12))
+              StatRow(
+                nick(row.playerId),
+                (report.rankProgression[row.playerId] ?? const <int>[]).join(
+                  ' → ',
+                ),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => PlayerProfileScreen(playerId: row.playerId),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        if (!report.matchups.isEmpty)
+          StatSection(
+            title: 'Matchups at this event',
+            subtitle: 'One event is a very small sample — read it as such.',
+            children: [
+              MatchupTable(
+                rows: report.matchups.rows,
+                labels: report.matchups.labels,
+              ),
+            ],
+          ),
+        if (conflicts.isNotEmpty)
+          StatSection(
+            title: 'Questionnaire conflicts',
+            subtitle:
+                'Where the two players\' own reports disagree. Kept as-is — '
+                'the confirmed result already stands and is unaffected.',
+            children: [
+              for (final entry in conflicts)
+                for (final conflict in entry.conflicts)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Text(
+                      '${entry.matchId}: ${conflict.detail}',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
 class _PlayerTile extends StatelessWidget {
   final Map player;
   const _PlayerTile({required this.player});
@@ -218,7 +351,9 @@ class _PlayerTile extends StatelessWidget {
                 style: theme.textTheme.titleSmall,
               ),
               Text(
-                '${player['deckName']} · ${player['record']}',
+                '${player['deckName']} · ${player['record']}'
+                // Be honest about lists we reconstructed rather than froze.
+                '${player['listIsReconstructed'] == true ? ' · list reconstructed' : ''}',
                 style: theme.textTheme.bodySmall,
               ),
             ],
