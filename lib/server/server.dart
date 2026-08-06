@@ -354,13 +354,89 @@ Future<HttpServer> serveController(
   return io.serve(handler, InternetAddress.anyIPv4, port);
 }
 
-/// The host's LAN IPv4 (for the join URL/QR), or null if not on a network.
-Future<String?> lanIpv4() async {
-  final ifaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
-  for (final i in ifaces) {
-    for (final a in i.addresses) {
-      if (!a.isLoopback) return a.address;
-    }
-  }
-  return null;
+/// One address the host could advertise in its join URL/QR.
+class LanAddress {
+  final String ip;
+  final String interfaceName;
+  const LanAddress({required this.ip, required this.interfaceName});
+
+  @override
+  String toString() => '$ip ($interfaceName)';
 }
+
+/// Interfaces a player on the same Wi-Fi can never reach: VPN and other
+/// tunnels, and the cellular radio. Advertising one of these produces a QR code
+/// nobody can open, which is the single worst LAN failure mode.
+const _unreachablePrefixes = [
+  'tun',
+  'tap',
+  'utun',
+  'ppp',
+  'wg',
+  'ipsec',
+  'vpn',
+  'nordlynx',
+  'rmnet',
+  'pdp_ip',
+  'ccmni',
+  'clat',
+  'dummy',
+];
+
+/// Interfaces that normally carry the local network, phone hotspot included.
+const _localPrefixes = ['wlan', 'swlan', 'ap', 'eth', 'en', 'wifi', 'bridge'];
+
+bool _hasPrefix(List<String> prefixes, String name) =>
+    prefixes.any(name.startsWith);
+
+/// Lower is better. Pure, so the ranking is testable with no device.
+int lanAddressRank(LanAddress a) {
+  final name = a.interfaceName.toLowerCase();
+  var score = _hasPrefix(_unreachablePrefixes, name)
+      ? 100
+      : (_hasPrefix(_localPrefixes, name) ? 0 : 10);
+  // Home and office networks are overwhelmingly 192.168/16, then 10/8. An
+  // address outside RFC 1918 is a last resort, not a likely LAN.
+  score += switch (a.ip) {
+    final ip when ip.startsWith('192.168.') => 0,
+    final ip when ip.startsWith('10.') => 1,
+    final ip when _is172Private(ip) => 2,
+    _ => 50,
+  };
+  return score;
+}
+
+bool _is172Private(String ip) {
+  if (!ip.startsWith('172.')) return false;
+  final second = int.tryParse(ip.split('.').elementAtOrNull(1) ?? '');
+  return second != null && second >= 16 && second <= 31;
+}
+
+/// Usable LAN addresses, best candidate first. Loopback and link-local
+/// (169.254, "no DHCP answered") addresses are never usable and are dropped.
+List<LanAddress> rankLanAddresses(Iterable<LanAddress> candidates) {
+  final usable = [
+    for (final a in candidates)
+      if (!a.ip.startsWith('127.') && !a.ip.startsWith('169.254.')) a,
+  ];
+  usable.sort((x, y) {
+    final c = lanAddressRank(x).compareTo(lanAddressRank(y));
+    if (c != 0) return c;
+    final n = x.interfaceName.compareTo(y.interfaceName);
+    return n != 0 ? n : x.ip.compareTo(y.ip); // stable across restarts
+  });
+  return usable;
+}
+
+/// Every LAN IPv4 this device could advertise, best first.
+Future<List<LanAddress>> lanIpv4Candidates() async {
+  final ifaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+  return rankLanAddresses([
+    for (final i in ifaces)
+      for (final a in i.addresses)
+        if (!a.isLoopback) LanAddress(ip: a.address, interfaceName: i.name),
+  ]);
+}
+
+/// The host's best LAN IPv4 (for the join URL/QR), or null if not on a network.
+Future<String?> lanIpv4() async => (await lanIpv4Candidates()).firstOrNull?.ip;

@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased]
+## [0.0.4] - 2026-08-06
 
 ### Added
 
@@ -17,6 +17,12 @@ All notable changes to this project are documented here.
 - Optional round timer, configurable at creation or mid-event, shown to the
   organizer and to every player. It is a wall clock: it never ends a round,
   changes a result, or advances anything.
+- Import a bundle from a file, not only from the clipboard — exports are files,
+  so this closes the loop.
+- Pick which local address the join QR advertises, when the phone has more than
+  one.
+- The player's browser offers back the last list they typed when they land in a
+  new event with nothing saved, and remembers their nickname across events.
 
 - Statistics tab: one filter (date, format, series, tournament, player,
   opponent, deck, archetype, byes) applied across players, decks, archetypes
@@ -49,6 +55,10 @@ All notable changes to this project are documented here.
 - Default Swiss round counts. Every field of 8 or fewer players was given 3
   rounds and every field of 9 to 16 got 5; 4 players now correctly play 2
   rounds and 16 play 4, per MTR Appendix E.
+- LAN hosting no longer advertises the first address it finds. A phone on a
+  VPN, or using mobile data alongside Wi-Fi, was handing out a join link no
+  player could open; local addresses are now ranked and tunnels and the
+  cellular radio come last.
 
 ## [0.0.3] - 2026-08-05
 

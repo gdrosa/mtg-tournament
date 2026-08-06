@@ -1,7 +1,7 @@
 name: mtg_tourney
 description: "LAN and online tournament manager for Magic: The Gathering."
 publish_to: none
-version: 0.0.3+3
+version: 0.0.4+4
 
 environment:
   sdk: ^3.12.2
@@ -35,6 +35,7 @@ dependencies:
   # "A newer stable release exists" check: installed version + open the APK.
   package_info_plus: ^10.2.1
   url_launcher: ^6.3.1
+  file_selector: ^1.1.0
 
 dev_dependencies:
   flutter_test:

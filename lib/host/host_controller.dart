@@ -87,6 +87,18 @@ class HostController extends ChangeNotifier {
   String? hostToken;
   String? hostPlayerId;
   String? lanIp;
+
+  /// Every LAN address this device could advertise, best first. More than one
+  /// means the organizer can pick, which is the fix for a phone on a VPN or
+  /// tethering while also on Wi-Fi.
+  List<LanAddress> lanCandidates = const [];
+
+  /// ponytail: the organizer's manual pick lives for this app run only. It
+  /// deliberately stays out of the persisted JSON, which is also the Drive
+  /// backup and the shareable export — a local network address does not belong
+  /// in either. Persist it if organizers report re-picking after a restart.
+  String? _pinnedLanIp;
+
   bool ready = false;
   bool _initialized = false;
   final int port = 8080;
@@ -209,6 +221,15 @@ class HostController extends ChangeNotifier {
       RelayConnectionState.stopped =>
         transportError == null ? 'Starting' : 'Needs attention',
     };
+  }
+
+  /// Advertise a different local address — for when the automatic pick lands on
+  /// a VPN or a second adapter and players cannot open the QR code.
+  void useLanAddress(String ip) {
+    if (!lanCandidates.any((a) => a.ip == ip)) return;
+    _pinnedLanIp = ip;
+    lanIp = ip;
+    notifyListeners();
   }
 
   Map<String, dynamic> get snapshot => server.snapshotFor(hostPlayerId);
@@ -600,7 +621,12 @@ class HostController extends ChangeNotifier {
         staticHandler: staticHandler,
         imageDirPath: _imageDirPath,
       );
-      lanIp = await lanIpv4();
+      lanCandidates = await lanIpv4Candidates();
+      // Keep an address the organizer picked by hand if it is still up.
+      final pinned = _pinnedLanIp;
+      lanIp = lanCandidates.any((a) => a.ip == pinned)
+          ? pinned
+          : lanCandidates.firstOrNull?.ip;
       if (lanIp == null) {
         _transportError =
             'No LAN address is available. Connect to Wi-Fi and retry.';

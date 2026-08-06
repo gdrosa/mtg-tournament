@@ -342,6 +342,14 @@ class _HostScreenState extends State<HostScreen> {
                     textAlign: TextAlign.center,
                     style: theme.textTheme.bodySmall,
                   ),
+                  // A phone on a VPN, tethering, or a second adapter can end up
+                  // advertising an address no player can open. Offer the others.
+                  if (c.hostingMode == HostingMode.lan &&
+                      c.lanCandidates.length > 1)
+                    TextButton(
+                      onPressed: _pickLanAddress,
+                      child: const Text('Players can\'t open this link?'),
+                    ),
                 ] else ...[
                   const Padding(
                     padding: EdgeInsets.all(20),
@@ -415,6 +423,43 @@ class _HostScreenState extends State<HostScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  /// Let the organizer advertise a different local address. The list is ranked,
+  /// so the first entry is the automatic pick.
+  Future<void> _pickLanAddress() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              title: Text('Which address are players on?'),
+              subtitle: Text(
+                'Pick the one for the Wi-Fi everyone shares. The QR code and '
+                'link update immediately.',
+              ),
+            ),
+            const Divider(height: 1),
+            for (final a in c.lanCandidates)
+              ListTile(
+                leading: Icon(
+                  a.ip == c.lanIp
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                ),
+                title: Text(a.ip),
+                subtitle: Text(a.interfaceName),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  c.useLanAddress(a.ip);
+                },
+              ),
+          ],
+        ),
+      ),
     );
   }
 

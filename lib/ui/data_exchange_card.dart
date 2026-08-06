@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../host/host_controller.dart';
 import '../server/interchange.dart';
 import '../services/data_exchange.dart';
 import 'app_scope.dart';
@@ -108,9 +109,18 @@ class _DataExchangeCardState extends State<DataExchangeCard> {
                 ],
               ),
               const SizedBox(height: 12),
+              FilledButton.tonalIcon(
+                onPressed: () => _run(_importFromFile),
+                icon: const Icon(Icons.folder_open_outlined),
+                label: const Text('Import from a file'),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                ),
+              ),
+              const SizedBox(height: 8),
               OutlinedButton.icon(
                 onPressed: () => _run(_importFromClipboard),
-                icon: const Icon(Icons.download_outlined),
+                icon: const Icon(Icons.content_paste_outlined),
                 label: const Text('Import from clipboard'),
                 style: OutlinedButton.styleFrom(
                   minimumSize: const Size.fromHeight(48),
@@ -119,8 +129,9 @@ class _DataExchangeCardState extends State<DataExchangeCard> {
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
-                  'Copy a shared bundle, then tap Import. You see exactly what '
-                  'would change before anything is applied.',
+                  'Open a bundle someone sent you, or paste one from a chat. '
+                  'You see exactly what would change before anything is '
+                  'applied.',
                   style: theme.textTheme.bodySmall,
                 ),
               ),
@@ -137,11 +148,25 @@ class _DataExchangeCardState extends State<DataExchangeCard> {
         child: Text(label),
       );
 
+  Future<void> _importFromFile() async {
+    final c = AppScope.of(context);
+    final found = await previewFileBundle(c.server);
+    if (found == null) return; // picker dismissed — not a failure
+    if (!mounted) return;
+    await _applyFound(c, found);
+  }
+
   Future<void> _importFromClipboard() async {
     final c = AppScope.of(context);
     final found = await previewClipboardBundle(c.server);
     if (!mounted) return;
+    await _applyFound(c, found);
+  }
 
+  Future<void> _applyFound(
+    HostController c,
+    ({Map<String, dynamic>? bundle, ImportPreview preview}) found,
+  ) async {
     final preview = found.preview;
     final bundle = found.bundle;
     if (bundle == null || !preview.canImport) {

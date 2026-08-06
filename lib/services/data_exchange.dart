@@ -1,18 +1,15 @@
 /// Sharing and receiving interchange bundles from the host UI.
 ///
 /// The merge rules live in `server/interchange.dart`; this file only moves
-/// bytes — out through the Android share sheet, in through the clipboard.
-///
-/// ponytail: no file-picker dependency. `file_picker` needs win32 ^5.9 while
-/// the `share_plus` already in this app needs ^6.0, so the two cannot coexist;
-/// rather than downgrade a working share path, importing reads the clipboard,
-/// which covers the "someone sent me their tournament" case. Swap in a picker
-/// the day that constraint clears — [importBundleText] is the seam.
+/// bytes — out through the Android share sheet, in from a picked file or the
+/// clipboard. Exports are files, so opening a file is the path that closes the
+/// loop; the clipboard stays for a bundle pasted into a chat.
 library;
 
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -85,15 +82,11 @@ Future<void> _shareText(
 /// an [ImportPreview] carrying the reason it cannot be used.
 ({Map<String, dynamic>? bundle, ImportPreview preview}) inspectBundleText(
   ServerController c,
-  String? raw,
-) {
+  String? raw, {
+  String emptyMessage = 'The clipboard is empty. Copy the shared bundle first.',
+}) {
   if (raw == null || raw.trim().isEmpty) {
-    return (
-      bundle: null,
-      preview: ImportPreview.error(
-        'The clipboard is empty. Copy the shared bundle first.',
-      ),
-    );
+    return (bundle: null, preview: ImportPreview.error(emptyMessage));
   }
   final decoded = decodeBundle(raw);
   if (decoded == null) {
@@ -116,6 +109,33 @@ previewClipboardBundle(ServerController c) async {
     text = null;
   }
   return inspectBundleText(c, text);
+}
+
+/// Ask for a file and report what importing it would change. Returns null when
+/// the picker is dismissed, which must not be reported as a failure.
+Future<({Map<String, dynamic>? bundle, ImportPreview preview})?>
+previewFileBundle(ServerController c) async {
+  // The share sheet writes .json, but a bundle mailed around can arrive as
+  // .txt or with no extension at all, so the filter stays wide.
+  const types = [
+    XTypeGroup(
+      label: 'Tournament data',
+      extensions: ['json', 'txt'],
+      mimeTypes: ['application/json', 'text/plain'],
+    ),
+  ];
+  final file = await openFile(acceptedTypeGroups: types);
+  if (file == null) return null;
+  String? text;
+  try {
+    text = await file.readAsString();
+  } catch (_) {
+    return (
+      bundle: null,
+      preview: ImportPreview.error('That file could not be read.'),
+    );
+  }
+  return inspectBundleText(c, text, emptyMessage: 'That file is empty.');
 }
 
 /// Apply a bundle. Additive and idempotent — see [mergeBundle].

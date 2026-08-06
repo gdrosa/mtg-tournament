@@ -16,8 +16,23 @@ const initialJoinCode = (pageParams.get('t') || '').trim().toUpperCase();
 const storagePrefix = isOnline ? `mtg.room.${roomId}.` : 'mtg.';
 
 // ---- session (durable on this device) ----
+// Sessions are scoped to one room, because a token only means anything to the
+// host that issued it. The nickname and the last list you typed are NOT: they
+// are yours, and re-typing 75 cards for every new online event is the single
+// worst thing this client asks of a player.
+const LAST_NICK_KEY = 'mtg.lastNick';
+const LAST_DECK_KEY = 'mtg.lastDeck';
+
+function remember(key, value) {
+  try { localStorage.setItem(key, value); } catch (_) { /* private mode / full */ }
+}
+
+function lastDeck() {
+  try { return JSON.parse(localStorage.getItem(LAST_DECK_KEY) || 'null'); } catch (_) { return null; }
+}
+
 let token = localStorage.getItem(storagePrefix + 'token') || null;
-let nickname = localStorage.getItem(storagePrefix + 'nick') || '';
+let nickname = localStorage.getItem(storagePrefix + 'nick') || localStorage.getItem(LAST_NICK_KEY) || '';
 let snap = null;
 let ws = null;
 let reconnectT = null;
@@ -257,8 +272,9 @@ async function doJoin(nick, code) {
   if (!code.trim()) return toast('Enter the event code', true);
   const r = await post('/api/join', { nickname: nick.trim(), code: code.trim().toUpperCase() });
   token = r.token; nickname = nick.trim();
-  localStorage.setItem(storagePrefix + 'token', token);
-  localStorage.setItem(storagePrefix + 'nick', nickname);
+  remember(storagePrefix + 'token', token);
+  remember(storagePrefix + 'nick', nickname);
+  remember(LAST_NICK_KEY, nickname);
   reauth();
   toast('Joined ' + (snap?.name || 'the event'));
 }
@@ -269,6 +285,9 @@ async function doRegisterAndEnter(name, main, side, existingId) {
     if (!name.trim()) return toast('Name your deck', true);
     const r = await post('/api/deck', { name: name.trim(), mainboard: main, sideboard: side });
     deckId = r.deckId;
+    // Kept on this device only, so the next event (or the next room) can offer
+    // it back rather than making you type it again.
+    remember(LAST_DECK_KEY, JSON.stringify({ name: name.trim(), main, side }));
   }
   await post('/api/enter', { deckId });
   toast('You are in! Good luck.');
@@ -359,6 +378,13 @@ $app.addEventListener('click', (event) => {
   const action = button.dataset.action;
   if (action === 'enter-deck') {
     doRegisterAndEnter('', '', '', button.dataset.deckId).catch(() => {});
+  } else if (action === 'use-last-deck') {
+    const last = lastDeck();
+    if (!last) return;
+    document.getElementById('d-name').value = last.name || '';
+    document.getElementById('d-main').value = last.main || '';
+    document.getElementById('d-side').value = last.side || '';
+    toast('Filled in — check it, then register');
   } else if (action === 'result') {
     sendResult(
       button.dataset.matchId,
@@ -435,10 +461,15 @@ function viewDeck() {
   const decks = snap.you.decks || [];
   const existing = decks.map((d) =>
     `<button class="ghost" style="margin-bottom:8px" data-action="enter-deck" data-deck-id="${esc(d.id)}">${esc(d.name)}</button>`).join('');
+  // Only offered when the host has no deck of yours — otherwise the saved
+  // decks above already cover it. This is what makes a brand-new online room
+  // (a fresh session, so no saved decks) bearable.
+  const last = decks.length ? null : lastDeck();
   view(`<div class="card">
     <h2>Register your deck</h2>
     <p class="muted">Welcome, ${esc(snap.you.nickname)}. Enter your list to enter the event.</p>
     ${decks.length ? `<h3>Use a saved deck</h3>${existing}<h3>or create a new one</h3>` : ''}
+    ${last ? `<button class="ghost" style="margin-bottom:8px" data-action="use-last-deck">Fill in my last deck: ${esc(last.name)}</button>` : ''}
     <label>Deck name</label>
     <input id="d-name" placeholder="e.g. Domain Zoo" />
     <label>Maindeck (one card per line, e.g. "4 Ragavan")</label>

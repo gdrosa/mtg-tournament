@@ -245,14 +245,15 @@ GitHub Actions runs the Flutter and relay checks for pushes and pull requests.
 
 ## Known limitations
 
-- LAN discovery selects the first non-loopback IPv4 address; devices with VPNs
-  or multiple active adapters may need a more explicit interface selector.
 - LAN HTTP/WebSocket traffic is not encrypted or mutually authenticated.
 - Online mode still depends on the organizer phone remaining connected; the
   Cloudflare component is a relay, not an authoritative tournament backend.
-- Online browser sessions are scoped to one random room. A participant retains
-  identity across reconnects to that room, but a new online event does not
-  automatically recover that browser's decks from an earlier room.
+- Online browser sessions are scoped to one random room, because a session
+  token only means anything to the host that issued it. A participant keeps
+  their identity across reconnects to that room; entering a new room is a new
+  identity, so the host has none of their decks. The client softens this by
+  keeping the last list typed and the nickname in device-local storage and
+  offering them back — but the host still records a separate player.
 - The player client and Dart snapshot schema are maintained manually rather
   than generated from a shared protocol definition.
 - `/api/host/*` exposes only the original create/start/advance/resolve/drop
@@ -262,9 +263,6 @@ GitHub Actions runs the Flutter and relay checks for pushes and pull requests.
 - Persistence is a single JSON document rather than a transactional database.
   The statistics layer is written against a fact table and typed report
   services, so swapping the store for SQLite would not change any formula.
-- Importing a bundle reads it from the clipboard; there is no file picker,
-  because `file_picker` requires `win32 ^5.9` while the `share_plus` already in
-  the app requires `^6.0`.
 - A player who has the app installed still joins events through the browser
   client; the app has no player mode that reuses their local profile and decks.
 - Release signing and Google OAuth configuration are deployment-owner concerns
