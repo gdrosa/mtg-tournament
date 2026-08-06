@@ -304,12 +304,30 @@ function sendSurvey() {
   }).then(() => toast('Thanks — saved as your own report'));
 }
 
+// ---- round header + optional round clock ----
+// The organizer sends an absolute deadline, so this counts down correctly even
+// if a push is missed. ponytail: trusts this device's clock to be roughly right
+// — it is a wall clock for players and gates nothing.
+function roundClock() {
+  if (!snap || snap.phase !== 'running' || !snap.roundEndsAt) return '';
+  const left = Math.round((new Date(snap.roundEndsAt) - Date.now()) / 1000);
+  if (left <= 0) return ' · time';
+  return ` · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+}
+
+function renderRoundLabel() {
+  if (!snap) return;
+  $round.textContent = (snap.phase === 'running') ? `Round ${snap.round}/${snap.plannedRounds}${roundClock()}`
+    : (snap.phase === 'finished' ? 'Finished' : (snap.phase === 'lobby' ? 'Lobby' : ''));
+}
+
+setInterval(renderRoundLabel, 1000);
+
 // ---- render ----
 function render() {
   if (!snap) return;
   document.getElementById('title').textContent = snap.name || 'MTG Tournament';
-  $round.textContent = (snap.phase === 'running') ? `Round ${snap.round}/${snap.plannedRounds}`
-    : (snap.phase === 'finished' ? 'Finished' : (snap.phase === 'lobby' ? 'Lobby' : ''));
+  renderRoundLabel();
 
   if (snap.phase === 'idle' || !snap.joinCode) {
     return view(`<div class="card center"><h2>No active tournament</h2>
@@ -450,9 +468,17 @@ function viewPlay() {
 
 function matchCard() {
   const m = snap.yourMatch;
-  if (!m) return '';
   if (snap.phase === 'finished')
     return `<div class="card center"><h2>Tournament complete</h2><p class="muted">Final standings below.</p></div>`;
+  // No match in a running round means you are not paired — in a knockout that
+  // means you are out; in Swiss it means the organizer is still pairing.
+  if (!m) {
+    if (snap.phase !== 'running') return '';
+    return `<div class="card center"><h2>${snap.kind === 'singleElimination' ? 'Knocked out' : 'Not paired this round'}</h2>
+      <p class="muted">${snap.kind === 'singleElimination'
+        ? 'Thanks for playing — your results are in the standings below.'
+        : 'Sit tight; the organizer will pair you.'}</p></div>`;
+  }
   if (m.bye)
     return `<div class="card center"><h2>Bye</h2><p class="muted">You have a bye this round — it counts as a win.</p></div>`;
 

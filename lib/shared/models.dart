@@ -9,6 +9,20 @@ import 'cards.dart';
 /// Lifecycle of a tournament.
 enum TournamentStatus { lobby, running, finished }
 
+/// How rounds are paired.
+///
+/// [swiss] plays a fixed number of rounds and pairs on record; everyone plays
+/// every round. [singleElimination] pairs only the winners of the previous
+/// round, so the field halves each time and the bracket length is fixed by the
+/// entrant count.
+enum TournamentKind {
+  swiss,
+  singleElimination;
+
+  String get label =>
+      this == TournamentKind.swiss ? 'Swiss' : 'Single elimination';
+}
+
 /// Per-match lifecycle. See ARCHITECTURE.md §4.2.
 ///
 /// ```
@@ -277,11 +291,19 @@ class Match {
   }
 }
 
-/// A Swiss round: an ordered set of matches.
+/// A round: an ordered set of matches.
 class Round {
   final int number; // 1-based
   final List<Match> matches;
-  Round(this.number, this.matches);
+
+  /// Wall-clock deadline when the organizer runs a round timer, else null.
+  ///
+  /// Display only. Nothing in the state machine reads it: a round that runs out
+  /// of time still needs the organizer to resolve and advance it, exactly as
+  /// before. Set at pairing time and re-settable by the host.
+  DateTime? endsAt;
+
+  Round(this.number, this.matches, {this.endsAt});
 
   bool get isComplete => matches.every((m) => m.state == MatchState.confirmed);
 
@@ -294,11 +316,14 @@ class Round {
 
   Map<String, dynamic> toJson() => {
     'number': number,
+    if (endsAt != null) 'endsAt': endsAt!.toIso8601String(),
     'matches': matches.map((m) => m.toJson()).toList(),
   };
-  factory Round.fromJson(Map j) => Round(j['number'] as int, [
-    for (final m in (j['matches'] as List)) Match.fromJson(m as Map),
-  ]);
+  factory Round.fromJson(Map j) => Round(
+    j['number'] as int,
+    [for (final m in (j['matches'] as List)) Match.fromJson(m as Map)],
+    endsAt: j['endsAt'] == null ? null : DateTime.parse(j['endsAt'] as String),
+  );
 }
 
 /// A flattened result used by the standings/tiebreaker engine.

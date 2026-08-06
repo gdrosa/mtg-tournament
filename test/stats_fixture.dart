@@ -98,6 +98,9 @@ runLeagueEvent(
   String series = '',
   Map<String, String> archetypes = const {},
   bool archive = true,
+  // Fixed rather than derived from the field size, so these fixtures keep the
+  // same sample sizes whatever the recommended-rounds table says.
+  int rounds = 3,
 }) {
   final players = <String, String>{};
   final decks = <String, String>{};
@@ -124,6 +127,7 @@ runLeagueEvent(
     hostPlayerId: players[nicknames.first]!,
     format: format,
     series: series,
+    rounds: rounds,
   );
   for (final nick in nicknames) {
     c.joinTournament(playerId: players[nick]!, deckId: decks[nick]!);

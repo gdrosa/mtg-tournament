@@ -6,10 +6,11 @@ void main() {
   group('recommendedRounds (MTR App. E)', () {
     test('boundaries', () {
       expect(recommendedRounds(1), 0);
-      expect(recommendedRounds(2), 3);
+      expect(recommendedRounds(2), 1);
+      expect(recommendedRounds(4), 2);
       expect(recommendedRounds(8), 3);
-      expect(recommendedRounds(9), 5);
-      expect(recommendedRounds(16), 5);
+      expect(recommendedRounds(9), 4);
+      expect(recommendedRounds(16), 4);
       expect(recommendedRounds(17), 5);
       expect(recommendedRounds(32), 5);
       expect(recommendedRounds(33), 6);

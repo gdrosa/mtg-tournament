@@ -49,7 +49,7 @@ server isolate.
 | Module | Responsibility |
 | --- | --- |
 | `lib/shared/models.dart` | Serializable tournament, player, deck, round, and match types |
-| `lib/shared/swiss.dart` | Pure Swiss pairing and tiebreak calculations |
+| `lib/shared/swiss.dart` | Pure pairing, tiebreak, and round-count calculations |
 | `lib/shared/tournament_engine.dart` | Tournament lifecycle and match state machine |
 | `lib/shared/stats.dart` | Cross-event player and deck statistics |
 | `lib/server/controller.dart` | Durable registries, command orchestration, snapshots, and archive views |
@@ -128,7 +128,8 @@ organizer rather than reconciled to one side.
 
 The state machine uses `lobby`, `running`, and `finished` phases.
 
-- The host creates an event and receives a short join code.
+- The host creates an event, choosing Swiss or single elimination, and receives
+  a short join code.
 - Players establish a token-backed session, save a deck, and enter the lobby.
 - Starting the tournament locks entered decks and creates round one.
 - Players submit scores independently in canonical match orientation.
@@ -140,6 +141,28 @@ The state machine uses `lobby`, `running`, and `finished` phases.
 
 The pairing engine is deterministic when supplied a seeded `Random`, which
 keeps it straightforward to regression-test.
+
+### Structure, rounds, and the clock
+
+Swiss pairs everyone every round and plays `recommendedRounds(players)` of them
+(MTR Appendix E: the rounds needed to leave one undefeated player, so the count
+doubles with the field). The organizer may override that number before or
+during the event, but never below the rounds already paired. Single elimination
+pairs only the previous round's winners; its length is `bracketRounds(players)`
+and is not adjustable, because it is arithmetic rather than a preference. A
+drawn knockout match stops the bracket with an error instead of choosing a
+winner — no tiebreaker can settle it, so it is the organizer's call.
+
+Generated pairings are editable until they are played: `swapPairing` exchanges
+two seats in the current round, including the bye, and refuses any match that
+already carries a submitted or accepted result. Match ids survive the swap, so
+anything already referring to a match stays valid.
+
+The round timer is a wall clock and nothing more. `Round.endsAt` is an absolute
+deadline pushed to every client (so a client that misses an update still counts
+down to the right moment), set when a round is paired and re-settable by the
+host. No command reads it: a round that runs out of time still needs the
+organizer to resolve and advance it.
 
 ## HTTP and realtime boundary
 
@@ -232,6 +255,10 @@ GitHub Actions runs the Flutter and relay checks for pushes and pull requests.
   automatically recover that browser's decks from an earlier room.
 - The player client and Dart snapshot schema are maintained manually rather
   than generated from a shared protocol definition.
+- `/api/host/*` exposes only the original create/start/advance/resolve/drop
+  commands. Round counts, pairing edits, and the round timer are driven from
+  the organizer app against the controller directly, as event format and series
+  already were.
 - Persistence is a single JSON document rather than a transactional database.
   The statistics layer is written against a fact table and typed report
   services, so swapping the store for SQLite would not change any formula.

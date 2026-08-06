@@ -432,8 +432,11 @@ class ServerController {
     required String name,
     required String hostPlayerId,
     HostingMode mode = HostingMode.lan,
+    TournamentKind kind = TournamentKind.swiss,
     String format = '',
     String series = '',
+    int rounds = 0,
+    int roundMinutes = 0,
   }) {
     final normalizedName = name.trim();
     if (normalizedName.isEmpty) throw EngineError('Tournament name required.');
@@ -448,10 +451,16 @@ class ServerController {
       id: _uuid.v4(),
       name: normalizedName,
       createdAt: clock(),
+      kind: kind,
       format: format.trim(),
       series: series.trim(),
       rng: _rng,
+      clock: clock,
     );
+    if (roundMinutes > 0) engine!.setRoundMinutes(roundMinutes);
+    if (rounds > 0 && kind == TournamentKind.swiss) {
+      engine!.setPlannedRounds(rounds);
+    }
     joinCode = _shortCode();
     _changed();
     return joinCode!;
@@ -499,6 +508,34 @@ class ServerController {
     // never gated anything.
     _closeSurveysBeforeRound();
     _requireEngine().advanceRound();
+    _changed();
+  }
+
+  /// Host overrides for how the event is run. None of them touches a played
+  /// match: they change how many rounds remain, who is seated where in the
+  /// round about to be played, and the clock on the wall.
+  void setPlannedRounds(int rounds) {
+    _requireEngine().setPlannedRounds(rounds);
+    _changed();
+  }
+
+  void setRoundMinutes(int minutes) {
+    _requireEngine().setRoundMinutes(minutes);
+    _changed();
+  }
+
+  void startRoundTimer() {
+    _requireEngine().startRoundTimer();
+    _changed();
+  }
+
+  void stopRoundTimer() {
+    _requireEngine().stopRoundTimer();
+    _changed();
+  }
+
+  void swapPairing(String playerA, String playerB) {
+    _requireEngine().swapPairing(playerA, playerB);
     _changed();
   }
 
@@ -671,9 +708,15 @@ class ServerController {
         : HostingMode.values.byName(modeName);
     final nextEngine = j['engine'] == null
         ? null
-        : TournamentEngine.fromJson(j['engine'] as Map, rng: _rng);
+        : TournamentEngine.fromJson(
+            j['engine'] as Map,
+            rng: _rng,
+            clock: clock,
+          );
     for (final a in (j['archive'] as List? ?? const [])) {
-      nextArchive.add(TournamentEngine.fromJson(a as Map, rng: _rng));
+      nextArchive.add(
+        TournamentEngine.fromJson(a as Map, rng: _rng, clock: clock),
+      );
     }
 
     players
@@ -918,6 +961,11 @@ class ServerController {
       'joinCode': joinCode,
       'round': e.rounds.length,
       'plannedRounds': e.plannedRounds,
+      'kind': e.kind.name,
+      'roundMinutes': e.roundMinutes,
+      // Absolute deadline, not a remaining duration, so a client that misses a
+      // push still counts down to the right moment.
+      'roundEndsAt': e.roundEndsAt?.toIso8601String(),
       'isHost': isHost,
       'you': viewerId == null
           ? null
@@ -942,6 +990,12 @@ class ServerController {
                   'matchId': m.id,
                   'p1': players[m.p1Id]?.nickname ?? '?',
                   'p2': m.isBye ? null : (players[m.p2Id]?.nickname ?? '?'),
+                  // Host-only view, so seat ids are safe here — the organizer
+                  // needs them to re-pair before the round is played.
+                  'p1Id': m.p1Id,
+                  'p2Id': m.p2Id,
+                  'editable':
+                      m.isBye || (m.accepted == null && m.submissions.isEmpty),
                   'state': m.state.name,
                   'result': m.accepted == null
                       ? null

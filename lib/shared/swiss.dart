@@ -17,18 +17,37 @@ const int kWinPoints = 3;
 const int kDrawPoints = 1;
 const int kLossPoints = 0;
 
-/// Recommended number of Swiss rounds for [players] (MTR Appendix E, "other
-/// formats" / Constructed column). Returns 0 for fewer than 2 players.
+/// Recommended number of Swiss rounds for [players] (MTR Appendix E). Returns 0
+/// for fewer than 2 players.
+///
+/// Each tier is the number of rounds needed for exactly one undefeated player,
+/// so it doubles with the field: 4 players decide it in 2 rounds, 8 in 3, 16 in
+/// 4. Larger fields cap out where the MTR's table does.
 int recommendedRounds(int players) {
   if (players < 2) return 0;
+  if (players <= 2) return 1;
+  if (players <= 4) return 2;
   if (players <= 8) return 3;
-  if (players <= 16) return 5;
+  if (players <= 16) return 4;
   if (players <= 32) return 5;
   if (players <= 64) return 6;
   if (players <= 128) return 7;
   if (players <= 226) return 8;
   if (players <= 409) return 9;
   return 10;
+}
+
+/// Rounds a single-elimination bracket needs for [players]: how many times the
+/// field halves before one is left. 5 players play 3 rounds (some with a bye).
+int bracketRounds(int players) {
+  if (players < 2) return 0;
+  var rounds = 0;
+  var seats = 1;
+  while (seats < players) {
+    seats *= 2;
+    rounds++;
+  }
+  return rounds;
 }
 
 /// Canonical unordered key for a pair of player ids.

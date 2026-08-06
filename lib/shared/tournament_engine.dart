@@ -19,11 +19,23 @@ class EngineError implements Exception {
   String toString() => 'EngineError: $message';
 }
 
+/// Upper bound on a hand-set Swiss round count — a guard against a fat-fingered
+/// "50", not a competitive rule.
+const int kMaxPlannedRounds = 20;
+
+/// Longest configurable round timer.
+const int kMaxRoundMinutes = 240;
+
 class TournamentEngine {
   final String id;
   final String name;
   final DateTime createdAt;
   final Random _rng;
+  final DateTime Function() _clock;
+
+  /// Swiss or single elimination. Fixed at creation: changing it mid-event
+  /// would invalidate every pairing already played.
+  final TournamentKind kind;
 
   /// Free-text format ("Modern", "Standard", "Cube"). Empty when unspecified —
   /// statistics simply group those together under "Unspecified".
@@ -36,16 +48,28 @@ class TournamentEngine {
   TournamentStatus status = TournamentStatus.lobby;
   final List<Entry> entries = [];
   final List<Round> rounds = [];
+
+  /// How many rounds this event will play. 0 means "not decided yet" — [start]
+  /// then fills in the default for [kind] and the field size. Set by hand with
+  /// [setPlannedRounds].
   int plannedRounds = 0;
+
+  /// Round length in minutes, or 0 for no timer. Optional and advisory: see
+  /// [Round.endsAt].
+  int roundMinutes = 0;
 
   TournamentEngine({
     required this.id,
     required this.name,
     required this.createdAt,
+    this.kind = TournamentKind.swiss,
     this.format = '',
     this.series = '',
+    this.roundMinutes = 0,
     Random? rng,
-  }) : _rng = rng ?? Random();
+    DateTime Function()? clock,
+  }) : _rng = rng ?? Random(),
+       _clock = clock ?? DateTime.now;
 
   // ---- Lobby -------------------------------------------------------------
 
@@ -64,6 +88,29 @@ class TournamentEngine {
       if (!e.dropped) e.playerId,
   ];
 
+  /// The round count this event would play if nobody overrode it.
+  int get defaultRounds => switch (kind) {
+    TournamentKind.swiss => recommendedRounds(activePlayerIds.length),
+    TournamentKind.singleElimination => bracketRounds(activePlayerIds.length),
+  };
+
+  /// Override the planned Swiss round count — before the event or during it,
+  /// but never below the rounds already played (they happened) and never above
+  /// [kMaxPlannedRounds]. A bracket's length is arithmetic, not a preference,
+  /// so single elimination refuses.
+  void setPlannedRounds(int n) {
+    if (kind == TournamentKind.singleElimination) {
+      throw EngineError('A knockout bracket sets its own number of rounds.');
+    }
+    final floor = rounds.isEmpty ? 1 : rounds.length;
+    if (n < floor || n > kMaxPlannedRounds) {
+      throw EngineError(
+        'Rounds must be between $floor and $kMaxPlannedRounds.',
+      );
+    }
+    plannedRounds = n;
+  }
+
   /// Lock the roster and generate round 1.
   void start() {
     if (status != TournamentStatus.lobby) {
@@ -73,8 +120,10 @@ class TournamentEngine {
       throw EngineError('Need at least 2 players to start.');
     }
     status = TournamentStatus.running;
-    if (plannedRounds == 0) {
-      plannedRounds = recommendedRounds(activePlayerIds.length);
+    // A knockout's length follows from the field, so a stale lobby override
+    // (players joined after it was set) must not truncate the bracket.
+    if (plannedRounds == 0 || kind == TournamentKind.singleElimination) {
+      plannedRounds = defaultRounds;
     }
     final order = List<String>.of(activePlayerIds)..shuffle(_rng);
     _appendRoundFrom(
@@ -248,12 +297,15 @@ class TournamentEngine {
       status = TournamentStatus.finished;
       return;
     }
-    final standings = currentStandings();
-    final active = activePlayerIds.toSet();
-    final ordered = [
-      for (final row in standings)
-        if (active.contains(row.playerId)) row.playerId,
-    ];
+    final ordered = kind == TournamentKind.singleElimination
+        ? _survivors()
+        : _standingsOrder();
+    // A knockout runs out of players before it runs out of rounds whenever the
+    // bracket had byes; either way, one player left is the end.
+    if (ordered.length < 2) {
+      status = TournamentStatus.finished;
+      return;
+    }
     _appendRoundFrom(
       pairRound(
         orderedPlayers: ordered,
@@ -262,6 +314,116 @@ class TournamentEngine {
       ),
     );
   }
+
+  /// Active players in standings order — the Swiss pairing order.
+  List<String> _standingsOrder() {
+    final active = activePlayerIds.toSet();
+    return [
+      for (final row in currentStandings())
+        if (active.contains(row.playerId)) row.playerId,
+    ];
+  }
+
+  /// Winners of the current round, in bracket order. Everyone else is out; they
+  /// keep the record they earned and simply stop being paired.
+  List<String> _survivors() {
+    final active = activePlayerIds.toSet();
+    final out = <String>[];
+    for (final m in currentRound.matches) {
+      if (m.isBye) {
+        if (active.contains(m.p1Id)) out.add(m.p1Id);
+        continue;
+      }
+      final s = m.accepted!;
+      if (s.isDraw) {
+        // Nothing in a knockout can break this tie, so it is the organizer's
+        // call — and refusing is far better than picking a player silently.
+        throw EngineError(
+          'A knockout needs a winner in every match. Set a result for the '
+          'drawn match before generating the next round.',
+        );
+      }
+      final winner = s.p1IsWinner ? m.p1Id : m.p2Id!;
+      if (active.contains(winner)) out.add(winner);
+    }
+    return out;
+  }
+
+  // ---- Manual pairing edits -----------------------------------------------
+
+  /// Swap where two players are seated in the current round, before either
+  /// match has a result. Moving one player is the same operation as swapping
+  /// them with whoever they are displacing, so this one command covers every
+  /// edit an organizer actually makes (including moving the bye).
+  void swapPairing(String playerA, String playerB) {
+    if (rounds.isEmpty) throw EngineError('No round to edit.');
+    if (playerA == playerB) throw EngineError('Pick two different players.');
+    final r = currentRound;
+    final ma = r.matchFor(playerA);
+    final mb = r.matchFor(playerB);
+    if (ma == null || mb == null) {
+      throw EngineError('Both players must be in the current round.');
+    }
+    if (identical(ma, mb)) {
+      throw EngineError('Those two are already paired against each other.');
+    }
+    for (final m in [ma, mb]) {
+      // A bye carries an auto-awarded 2-0 that is re-created below; a real
+      // match with a result is history and must not be re-seated.
+      if (!m.isBye && (m.accepted != null || m.submissions.isNotEmpty)) {
+        throw EngineError('That match already has a reported result.');
+      }
+    }
+    r.matches[r.matches.indexOf(ma)] = _reseat(ma, playerA, playerB);
+    r.matches[r.matches.indexOf(mb)] = _reseat(mb, playerB, playerA);
+  }
+
+  /// A copy of [m] with [out] replaced by [incoming], back at the start of its
+  /// lifecycle (a bye keeps its automatic win).
+  Match _reseat(Match m, String out, String incoming) {
+    final fresh = Match(
+      id: m.id,
+      p1Id: m.p1Id == out ? incoming : m.p1Id,
+      p2Id: m.p2Id == out ? incoming : m.p2Id,
+    );
+    if (fresh.isBye) {
+      fresh.accepted = const GameScore(2, 0);
+      fresh.state = MatchState.confirmed;
+    }
+    return fresh;
+  }
+
+  // ---- Round timer --------------------------------------------------------
+
+  /// Set the round length in minutes (0 turns the timer off). Applies to the
+  /// current round immediately and to every round generated afterwards.
+  void setRoundMinutes(int minutes) {
+    if (minutes < 0 || minutes > kMaxRoundMinutes) {
+      throw EngineError('A round can be 0 to $kMaxRoundMinutes minutes long.');
+    }
+    roundMinutes = minutes;
+    if (rounds.isEmpty) return;
+    if (minutes == 0) {
+      currentRound.endsAt = null;
+    } else {
+      startRoundTimer();
+    }
+  }
+
+  /// Start (or restart) the current round's clock from now.
+  void startRoundTimer() {
+    if (rounds.isEmpty) throw EngineError('No round in progress.');
+    if (roundMinutes <= 0) throw EngineError('Set a round length first.');
+    currentRound.endsAt = _clock().add(Duration(minutes: roundMinutes));
+  }
+
+  /// Stop the current round's clock without changing the configured length.
+  void stopRoundTimer() {
+    if (rounds.isNotEmpty) currentRound.endsAt = null;
+  }
+
+  /// When the current round is due to end, or null when no timer is running.
+  DateTime? get roundEndsAt => rounds.isEmpty ? null : currentRound.endsAt;
 
   void finish() => status = TournamentStatus.finished;
 
@@ -310,7 +472,15 @@ class TournamentEngine {
           ..accepted = const GameScore(2, 0),
       );
     }
-    rounds.add(Round(n, matches));
+    rounds.add(
+      Round(
+        n,
+        matches,
+        endsAt: roundMinutes > 0
+            ? _clock().add(Duration(minutes: roundMinutes))
+            : null,
+      ),
+    );
   }
 
   Iterable<MatchRecord> _recordsSoFar() sync* {
@@ -348,22 +518,32 @@ class TournamentEngine {
     'id': id,
     'name': name,
     'createdAt': createdAt.toIso8601String(),
+    if (kind != TournamentKind.swiss) 'kind': kind.name,
     if (format.isNotEmpty) 'format': format,
     if (series.isNotEmpty) 'series': series,
+    if (roundMinutes > 0) 'roundMinutes': roundMinutes,
     'status': status.name,
     'plannedRounds': plannedRounds,
     'entries': entries.map((e) => e.toJson()).toList(),
     'rounds': rounds.map((r) => r.toJson()).toList(),
   };
 
-  factory TournamentEngine.fromJson(Map j, {Random? rng}) {
+  factory TournamentEngine.fromJson(
+    Map j, {
+    Random? rng,
+    DateTime Function()? clock,
+  }) {
     final e = TournamentEngine(
       id: j['id'] as String,
       name: j['name'] as String,
       createdAt: DateTime.parse(j['createdAt'] as String),
+      // Saves written before knockouts existed are all Swiss.
+      kind: TournamentKind.values.byName((j['kind'] as String?) ?? 'swiss'),
       format: (j['format'] as String?) ?? '',
       series: (j['series'] as String?) ?? '',
+      roundMinutes: (j['roundMinutes'] as num?)?.toInt() ?? 0,
       rng: rng,
+      clock: clock,
     );
     e.status = TournamentStatus.values.byName(j['status'] as String);
     e.plannedRounds = j['plannedRounds'] as int;

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -20,6 +22,29 @@ class HostScreen extends StatefulWidget {
 class _HostScreenState extends State<HostScreen> {
   // The shared app-wide controller (created in main, resumed once at startup).
   late HostController c;
+
+  /// The player the organizer tapped first while re-pairing a round; the next
+  /// tap swaps the two seats.
+  String? _swapFrom;
+
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    // One repaint a second, and only while a round clock is actually running.
+    // The countdown is derived from an absolute deadline, so a dropped tick
+    // costs nothing and nothing here touches tournament state.
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && c.snapshot['roundEndsAt'] != null) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
 
   @override
   void didChangeDependencies() {
@@ -195,16 +220,23 @@ class _HostScreenState extends State<HostScreen> {
     String side = '',
     String format = '',
     String series = '',
+    TournamentKind kind = TournamentKind.swiss,
+    int rounds = 0,
+    int roundMinutes = 0,
   }) async {
     await _guard(() async {
+      Future<void> create() => c.createEvent(
+        name: name,
+        nickname: nick,
+        mode: mode,
+        kind: kind,
+        format: format,
+        series: series,
+        rounds: rounds,
+        roundMinutes: roundMinutes,
+      );
       try {
-        await c.createEvent(
-          name: name,
-          nickname: nick,
-          mode: mode,
-          format: format,
-          series: series,
-        );
+        await create();
       } on RelayException catch (e) {
         // The relay only refuses this way when the build's provisioning key is
         // missing or revoked, and the organizer can fix it here and now.
@@ -212,13 +244,7 @@ class _HostScreenState extends State<HostScreen> {
         final key = await _askProvisionKey();
         if (key == null) return; // cancelled: nothing was created
         await c.setRelayProvisionKey(key);
-        await c.createEvent(
-          name: name,
-          nickname: nick,
-          mode: mode,
-          format: format,
-          series: series,
-        );
+        await create();
       }
       if (existingDeckId != null) {
         c.joinWithDeck(existingDeckId);
@@ -408,10 +434,7 @@ class _HostScreenState extends State<HostScreen> {
         16 + MediaQuery.viewPaddingOf(context).bottom,
       ),
       children: [
-        Text(
-          'Round ${snap['round']} of ${snap['plannedRounds']}',
-          style: theme.textTheme.titleLarge,
-        ),
+        _roundHeader(snap),
         const SizedBox(height: 8),
         _attentionBanner(snap),
         _myMatchCard(snap),
@@ -421,7 +444,28 @@ class _HostScreenState extends State<HostScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Pairings', style: theme.textTheme.titleMedium),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Pairings',
+                        style: theme.textTheme.titleMedium,
+                      ),
+                    ),
+                    if (_swapFrom != null)
+                      TextButton(
+                        onPressed: () => setState(() => _swapFrom = null),
+                        child: const Text('Cancel swap'),
+                      ),
+                  ],
+                ),
+                Text(
+                  _swapFrom == null
+                      ? 'Tap a player, then tap another, to swap their seats '
+                            'before they play.'
+                      : 'Now tap the player to swap with.',
+                  style: theme.textTheme.bodySmall,
+                ),
                 const SizedBox(height: 4),
                 for (final p in pairings) _pairingRow(p),
               ],
@@ -439,6 +483,185 @@ class _HostScreenState extends State<HostScreen> {
         const SizedBox(height: 12),
         _standingsCard(snap),
       ],
+    );
+  }
+
+  Widget _roundHeader(Map snap) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            'Round ${snap['round']} of ${snap['plannedRounds']}',
+            style: theme.textTheme.titleLarge,
+          ),
+        ),
+        // A knockout's length is arithmetic, so there is nothing to edit.
+        if (snap['kind'] == 'swiss')
+          IconButton(
+            tooltip: 'Change the number of rounds',
+            icon: const Icon(Icons.format_list_numbered),
+            onPressed: () => _editRounds(snap),
+          ),
+        _timerChip(snap),
+      ],
+    );
+  }
+
+  String _mmss(Duration d) {
+    final s = d.inSeconds;
+    return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
+  }
+
+  Widget _timerChip(Map snap) {
+    final endsAt = snap['roundEndsAt'] as String?;
+    final minutes = (snap['roundMinutes'] as num?)?.toInt() ?? 0;
+    final left = endsAt == null
+        ? null
+        : DateTime.parse(endsAt).difference(DateTime.now());
+    final expired = left != null && left.isNegative;
+    return ActionChip(
+      avatar: Icon(
+        expired ? Icons.alarm_on : Icons.timer_outlined,
+        size: 18,
+        color: expired ? Theme.of(context).colorScheme.error : null,
+      ),
+      label: Text(
+        left == null
+            ? (minutes > 0 ? 'Paused' : 'No timer')
+            : (expired ? 'Time!' : _mmss(left)),
+      ),
+      onPressed: () => _timerSheet(snap),
+    );
+  }
+
+  /// Round-timer controls. The clock is a wall clock for the players; it never
+  /// ends a round or changes a result by itself.
+  Future<void> _timerSheet(Map snap) async {
+    final minutes = (snap['roundMinutes'] as num?)?.toInt() ?? 0;
+    final running = snap['roundEndsAt'] != null;
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              title: Text('Round timer'),
+              subtitle: Text(
+                'Shown to every player. It never advances the round on its own.',
+              ),
+            ),
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  for (final m in const [0, 25, 30, 40, 50, 60])
+                    ChoiceChip(
+                      label: Text(m == 0 ? 'Off' : '$m min'),
+                      selected: minutes == m,
+                      onSelected: (_) {
+                        Navigator.pop(ctx);
+                        _guard(() async => c.setRoundMinutes(m));
+                      },
+                    ),
+                ],
+              ),
+            ),
+            if (minutes > 0)
+              ListTile(
+                leading: const Icon(Icons.restart_alt),
+                title: Text(running ? 'Restart the clock' : 'Start the clock'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _guard(() async => c.startRoundTimer());
+                },
+              ),
+            if (running)
+              ListTile(
+                leading: const Icon(Icons.stop_circle_outlined),
+                title: const Text('Stop the clock'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _guard(() async => c.stopRoundTimer());
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _editRounds(Map snap) async {
+    final played = (snap['round'] as num?)?.toInt() ?? 1;
+    final ctrl = TextEditingController(text: '${snap['plannedRounds']}');
+    final value = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Number of rounds'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Round $played has already been paired, so that is the minimum. '
+              'Results already played are never affected.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Rounds'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, int.tryParse(ctrl.text.trim())),
+            child: const Text('Set'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (value != null) await _guard(() async => c.setRounds(value));
+  }
+
+  /// One tappable player seat. Two taps swap; the engine refuses if either
+  /// match already carries a reported result.
+  void _tapSeat(String playerId) {
+    final from = _swapFrom;
+    if (from == null || from == playerId) {
+      setState(() => _swapFrom = from == null ? playerId : null);
+      return;
+    }
+    setState(() => _swapFrom = null);
+    _guard(() async => c.swapPairing(from, playerId));
+  }
+
+  Widget _seat(Map p, String label, String? playerId) {
+    final theme = Theme.of(context);
+    final editable = p['editable'] == true && playerId != null;
+    final selected = _swapFrom != null && _swapFrom == playerId;
+    return InkWell(
+      onTap: editable ? () => _tapSeat(playerId) : null,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: selected
+            ? BoxDecoration(
+                color: theme.colorScheme.primaryContainer,
+                borderRadius: BorderRadius.circular(6),
+              )
+            : null,
+        child: Text(label, style: theme.textTheme.bodyMedium),
+      ),
     );
   }
 
@@ -630,7 +853,20 @@ class _HostScreenState extends State<HostScreen> {
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          Expanded(child: Text(title, style: theme.textTheme.bodyMedium)),
+          Expanded(
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _seat(p, '${p['p1']}', p['p1Id'] as String?),
+                Text(
+                  p['p2'] == null ? '— bye' : 'vs',
+                  style: theme.textTheme.bodySmall,
+                ),
+                if (p['p2'] != null)
+                  _seat(p, '${p['p2']}', p['p2Id'] as String?),
+              ],
+            ),
+          ),
           Text(
             p['result'] == null ? (p['state'] as String) : '${p['result']}',
             style: theme.textTheme.bodySmall?.copyWith(
@@ -856,6 +1092,9 @@ class _CreateForm extends StatefulWidget {
     String side,
     String format,
     String series,
+    TournamentKind kind,
+    int rounds,
+    int roundMinutes,
   })
   onCreate;
   final String initialNick;
@@ -880,8 +1119,12 @@ class _CreateFormState extends State<_CreateForm> {
   // Optional, and only ever used for grouping in statistics.
   final format = TextEditingController();
   final series = TextEditingController();
+  // Blank = "decide from the number of players when the event starts".
+  final rounds = TextEditingController();
+  final timer = TextEditingController();
   bool _busy = false;
   HostingMode? _mode;
+  TournamentKind _kind = TournamentKind.swiss;
   // The owner's saved deck to play with; null = "create a new deck below".
   String? _selectedDeckId;
 
@@ -897,7 +1140,17 @@ class _CreateFormState extends State<_CreateForm> {
 
   @override
   void dispose() {
-    for (final c in [name, nick, deck, main, side, format, series]) {
+    for (final c in [
+      name,
+      nick,
+      deck,
+      main,
+      side,
+      format,
+      series,
+      rounds,
+      timer,
+    ]) {
       c.dispose();
     }
     super.dispose();
@@ -955,6 +1208,54 @@ class _CreateFormState extends State<_CreateForm> {
         const SizedBox(height: 12),
         _field('Event name', name, hint: 'e.g. Friday Night Modern'),
         _field('Your nickname', nick, hint: 'e.g. Giuseppe'),
+        Text('Structure', style: theme.textTheme.labelLarge),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final k in TournamentKind.values)
+              ChoiceChip(
+                label: Text(k.label),
+                selected: _kind == k,
+                onSelected: (_) => setState(() => _kind = k),
+              ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _kind == TournamentKind.swiss
+              ? 'Everyone plays every round. Leave the round count blank and it '
+                    'is set from the number of players; you can change it later.'
+              : 'Losers are knocked out each round. The bracket length follows '
+                    'from how many players enter.',
+          style: theme.textTheme.bodySmall,
+        ),
+        const SizedBox(height: 10),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (_kind == TournamentKind.swiss) ...[
+              Expanded(
+                child: _field(
+                  'Rounds (optional)',
+                  rounds,
+                  hint: 'auto',
+                  number: true,
+                ),
+              ),
+              const SizedBox(width: 12),
+            ],
+            Expanded(
+              child: _field(
+                'Round timer (min)',
+                timer,
+                hint: 'off',
+                number: true,
+              ),
+            ),
+          ],
+        ),
         // Optional labels. They change nothing about how the event runs; they
         // are what lets statistics say "your Modern record" or "the spring
         // league" later on.
@@ -1031,6 +1332,11 @@ class _CreateFormState extends State<_CreateForm> {
       return;
     }
     setState(() => _busy = true);
+    // Blank or unparseable means "not set": 0 leaves the engine's default.
+    final roundCount = _kind == TournamentKind.swiss
+        ? (int.tryParse(rounds.text.trim()) ?? 0)
+        : 0;
+    final minutes = int.tryParse(timer.text.trim()) ?? 0;
     if (useExisting) {
       await widget.onCreate(
         name.text.trim(),
@@ -1039,6 +1345,9 @@ class _CreateFormState extends State<_CreateForm> {
         existingDeckId: _selectedDeckId,
         format: format.text.trim(),
         series: series.text.trim(),
+        kind: _kind,
+        rounds: roundCount,
+        roundMinutes: minutes,
       );
     } else {
       await widget.onCreate(
@@ -1050,6 +1359,9 @@ class _CreateFormState extends State<_CreateForm> {
         side: side.text,
         format: format.text.trim(),
         series: series.text.trim(),
+        kind: _kind,
+        rounds: roundCount,
+        roundMinutes: minutes,
       );
     }
     if (mounted) setState(() => _busy = false);
@@ -1060,11 +1372,13 @@ class _CreateFormState extends State<_CreateForm> {
     TextEditingController ctrl, {
     String? hint,
     int lines = 1,
+    bool number = false,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 10),
     child: TextField(
       controller: ctrl,
       maxLines: lines,
+      keyboardType: number ? TextInputType.number : null,
       decoration: InputDecoration(labelText: label, hintText: hint),
     ),
   );

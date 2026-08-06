@@ -6,6 +6,18 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- Single-elimination events alongside Swiss: losers are knocked out and the
+  bracket length follows from the entrant count. A drawn knockout match stops
+  the bracket for the organizer to resolve rather than picking a winner.
+- Manual round count for Swiss, before or during an event. It can never fall
+  below the rounds already paired.
+- Manual pairing edits: tap two players to swap their seats before the round is
+  played (the bye included). A match that already has a reported result cannot
+  be re-paired.
+- Optional round timer, configurable at creation or mid-event, shown to the
+  organizer and to every player. It is a wall clock: it never ends a round,
+  changes a result, or advances anything.
+
 - Statistics tab: one filter (date, format, series, tournament, player,
   opponent, deck, archetype, byes) applied across players, decks, archetypes
   and events, with player and deck profile screens behind it.
@@ -31,6 +43,12 @@ All notable changes to this project are documented here.
 
 - Decklist reveal and tournament history show the list as registered for that
   event, and mark a list as reconstructed when it predates deck revisions.
+
+### Fixed
+
+- Default Swiss round counts. Every field of 8 or fewer players was given 3
+  rounds and every field of 9 to 16 got 5; 4 players now correctly play 2
+  rounds and 16 play 4, per MTR Appendix E.
 
 ## [0.0.3] - 2026-08-05
 

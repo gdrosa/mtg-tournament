@@ -22,6 +22,7 @@ import '../services/cloud_sync.dart';
 import '../services/scryfall.dart';
 import '../shared/cards.dart';
 import '../shared/hosting.dart';
+import '../shared/models.dart';
 import 'foreground_task.dart';
 import 'online_relay.dart';
 import 'static_assets.dart';
@@ -713,8 +714,11 @@ class HostController extends ChangeNotifier {
     required String name,
     required String nickname,
     required HostingMode mode,
+    TournamentKind kind = TournamentKind.swiss,
     String format = '',
     String series = '',
+    int rounds = 0,
+    int roundMinutes = 0,
   }) async {
     if (hasActiveEvent) throw StateError('A tournament is already active.');
     final generation = ++_transportGeneration;
@@ -739,8 +743,11 @@ class HostController extends ChangeNotifier {
       name: name,
       hostPlayerId: s.playerId,
       mode: mode,
+      kind: kind,
       format: format,
       series: series,
+      rounds: rounds,
+      roundMinutes: roundMinutes,
     );
     final eventId = server.engine!.id;
     _hostingEnabled = true;
@@ -1126,6 +1133,13 @@ class HostController extends ChangeNotifier {
   void resolve(String matchId, int p1Wins, int p2Wins) =>
       server.hostResolve(matchId, p1Wins, p2Wins);
   void drop(String playerId) => server.dropPlayer(playerId);
+
+  void setRounds(int rounds) => server.setPlannedRounds(rounds);
+  void setRoundMinutes(int minutes) => server.setRoundMinutes(minutes);
+  void startRoundTimer() => server.startRoundTimer();
+  void stopRoundTimer() => server.stopRoundTimer();
+  void swapPairing(String playerA, String playerB) =>
+      server.swapPairing(playerA, playerB);
 
   /// End the event, stop the service, and clear the durable tournament (keeps
   /// players/decks for the next event).

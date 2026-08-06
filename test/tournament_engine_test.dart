@@ -32,11 +32,12 @@ void _confirmEntireRound(TournamentEngine e) {
 
 void main() {
   group('setup', () {
-    test('start pairs 4 players into 2 matches and plans 3 rounds', () {
+    test('start pairs 4 players into 2 matches and plans 2 rounds', () {
       final e = _engine();
       expect(e.status, TournamentStatus.running);
       expect(e.currentRound.matches.where((m) => !m.isBye).length, 2);
-      expect(e.plannedRounds, 3);
+      // Two rounds leave exactly one 2-0 player; a third would be padding.
+      expect(e.plannedRounds, 2);
     });
 
     test('cannot join after start', () {
@@ -129,7 +130,7 @@ void main() {
       expect(e.currentRound.number, 2);
     });
 
-    test('full 3-round run finishes with no rematches', () {
+    test('a full run finishes with no rematches', () {
       final e = _engine();
       final allPairs = <String>{};
       while (e.status == TournamentStatus.running) {
@@ -144,7 +145,7 @@ void main() {
         e.advanceRound();
       }
       expect(e.status, TournamentStatus.finished);
-      expect(e.rounds.length, 3);
+      expect(e.rounds.length, 2); // 4 players decide it in 2 rounds
       expect(e.currentStandings().length, 4);
     });
   });
