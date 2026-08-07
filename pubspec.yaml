@@ -1,7 +1,7 @@
 name: mtg_tourney
 description: "LAN and online tournament manager for Magic: The Gathering."
 publish_to: none
-version: 0.0.4+4
+version: 0.0.5+5
 
 environment:
   sdk: ^3.12.2
